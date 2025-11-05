@@ -1,0 +1,64 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+steps:
+  # Build the container image using the Dockerfile
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_SERVICE_NAME}', '.']
+
+  # Push the container image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_SERVICE_NAME}']
+
+  # Deploy container image to Cloud Run for the first time
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'deploy'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - '${_SERVICE_NAME}'
+      - '--image'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_SERVICE_NAME}'
+      - '--region'
+      - '${_REGION}'
+      - '--service-account'
+      - '${_SERVICE_ACCOUNT}'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--set-env-vars'
+      - 'SERVICE_ACCOUNT=${_SERVICE_ACCOUNT}' # Set initial env var
+
+  # Get the URL of the deployed service and update it with the SERVICE_URL env var
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'bash'
+    args:
+    - '-c'
+    - |
+      SERVICE_URL=$$(gcloud run services describe ${_SERVICE_NAME} --platform managed --region ${_REGION} --format 'value(status.url)') && \
+      gcloud run services update ${_SERVICE_NAME} \
+        --platform managed \
+        --region ${_REGION} \
+        --update-env-vars=SERVICE_ACCOUNT=${_SERVICE_ACCOUNT},SERVICE_URL=$$SERVICE_URL
+    waitFor: ['deploy']
+
+images:
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_SERVICE_NAME}'
+
+substitutions:
+  _REGION: 'us-central1'
+  _REPO_NAME: 'ccaas-sync-repo'
+  _SERVICE_NAME: 'ccaas-sync-service'
+

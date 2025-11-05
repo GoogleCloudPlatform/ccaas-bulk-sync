@@ -1,0 +1,28 @@
+{
+  "name": "ccaas-bulk-sync",
+  "version": "1.0.0",
+  "description": "A service to synchronize users between a directory and Google Cloud CCaaS.",
+  "main": "index.js",
+  "scripts": {
+      "start": "node index.js",
+      "build:css": "tailwindcss -i ./public/input.css -o ./public/output.css"
+  },
+  "dependencies": {
+    "@azure/msal-node": "^2.6.0",
+    "@google-cloud/firestore": "^7.7.0",
+    "@google-cloud/scheduler": "^5.2.0",
+    "@google-cloud/secret-manager": "^5.5.0",
+    "@microsoft/microsoft-graph-client": "^3.0.7",
+    "express": "^4.19.2",
+    "form-data": "^4.0.0",
+    "googleapis": "^137.1.0",
+    "isomorphic-fetch": "^3.0.0",
+    "ldapts": "^4.1.0",
+    "node-fetch": "^2.7.0"
+  },
+  "devDependencies": {
+      "autoprefixer": "^10.4.19",
+      "postcss": "^8.4.38",
+      "tailwindcss": "^3.4.3"
+  }
+}
