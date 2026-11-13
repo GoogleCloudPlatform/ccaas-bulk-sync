@@ -626,9 +626,10 @@
                         config.value.ccaas.apiKey = '';
                         config.value.directory.gcpKey = '';
                         config.value.directory.bindPassword = '';
+                        config.value.directory.clientSecret = '';
                     } catch (error) {
                         console.error("Save config error:", error);
-                        showStatusMessage('Failed to save configuration.', 'error');
+                        showStatusMessage(error.message || 'Failed to save configuration.', 'error');
                     } finally {
                         isSaving.value = false;
                     }

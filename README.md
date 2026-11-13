@@ -8,9 +8,12 @@ To run and test the application on your local machine:
 
 1. **Install Dependencies**: npm install  
 2. **Build CSS**: npm run build:css  
-3. **Run Server**: node index.js
+3. **Run Server**: ALLOW\_INSECURE\_LOCAL\_DEV=true node index.js
+4. **Run Tests**: npm test
 
 The application will be available at http://localhost:8080.
+
+**Note:** All /api/\* routes require an authenticated caller (see section 7). ALLOW\_INSECURE\_LOCAL\_DEV=true disables this check for local development only; it is ignored when running on Cloud Run.
 
 ## **1\. Enable Google Cloud APIs**
 
@@ -117,6 +120,8 @@ gcloud projects add-iam-policy-binding $PROJECT\_ID \\
 ## **5\. Build and Deploy the Service**
 
 This step uses Cloud Build to package the application into a Docker container and deploy it to Cloud Run.
+
+The service is deployed with \--no-allow-unauthenticated and \--ingress=internal-and-cloud-load-balancing, so its \*.run.app URL is not reachable from the internet. Users access it only through the IAP-protected load balancer configured in sections 6 and 7. The web UI will return "Service authentication is not configured" until you complete section 7.3.
 
 export SERVICE\_NAME="ccaas-sync-service"
 
@@ -237,6 +242,40 @@ unset IFS
 **d. Verify the IAP Policy**
 
 gcloud iap web get-iam-policy \--resource-type=backend-services \--service=ccaas-sync-backend
+
+### **7.3 Configure the Service to Verify IAP Identities**
+
+The application verifies the signed IAP header (x-goog-iap-jwt-assertion) on every API request and rejects any request that did not pass through IAP. Tell the service which IAP audience to expect:
+
+export BACKEND\_ID=$(gcloud compute backend-services describe ccaas-sync-backend \--global \--format='value(id)')  
+export IAP\_AUDIENCE="/projects/${PROJECT\_NUMBER}/global/backendServices/${BACKEND\_ID}"
+
+gcloud run services update $SERVICE\_NAME \\  
+    \--region=$REGION \\  
+    \--update-env-vars=IAP\_AUDIENCE=$IAP\_AUDIENCE
+
+## **8\. Securing an Existing Deployment (Upgrading)**
+
+Deployments created from earlier versions of this repository were deployed with \--allow-unauthenticated, which made the API reachable without IAP via the \*.run.app URL. After pulling this version:
+
+1. Redeploy with Cloud Build (section 5) and set IAP\_AUDIENCE (section 7.3).  
+2. Confirm the public invoker binding has been removed (remove it manually if it is still present):
+
+gcloud run services remove-iam-policy-binding $SERVICE\_NAME \\  
+    \--region=$REGION \\  
+    \--member="allUsers" \\  
+    \--role="roles/run.invoker"
+
+gcloud run services update $SERVICE\_NAME \--region=$REGION \--ingress=internal-and-cloud-load-balancing
+
+3. Verify that the \*.run.app URL is no longer reachable (expect HTTP 403/404):
+
+curl -s -o /dev/null -w "%{http\_code}\\n" -X POST "$(gcloud run services describe $SERVICE\_NAME \--region=$REGION \--format='value(status.url)')/api/config"
+
+4. **Rotate all stored credentials**, because they could have been exposed while the service was public: the Active Directory bind password, the CCaaS API key, the Microsoft Entra client secret, and the Google service account key. Enter the new values in the UI and save.  
+5. Review the stored configuration (CCaaS host, LDAP URL, Entra tenant) in the UI and the Cloud Run request logs for unexpected POST requests to /api/config, /api/sync, or /api/directory-test.
+
+**Note:** When you change the CCaaS host, LDAP URL, or Entra tenant/client ID, the service now requires the matching credential to be re-entered in the same save. This prevents a stored credential from being sent to a different server.
 
 ## **Appendix: Microsoft Entra ID Setup**
 

@@ -20,9 +20,16 @@ const { CloudSchedulerClient } = require('@google-cloud/scheduler');
 const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
 const path = require('path');
 const syncLogic = require('./sync-logic');
+const { requireAuth } = require('./auth');
+const { buildConfigToSave, ConfigValidationError } = require('./config-security');
 
 const app = express();
+app.disable('x-powered-by');
 app.use(express.json());
+
+// Every API route requires an authenticated caller (IAP user, or Cloud
+// Scheduler for POST /api/sync). See auth.js.
+app.use('/api', requireAuth);
 
 // --- Clients ---
 const firestore = new Firestore();
@@ -140,53 +147,32 @@ app.get('/api/config', async (req, res) => {
 
 app.post('/api/config', async (req, res) => {
     try {
-        const incomingConfig = req.body;
         const currentDoc = await configDocRef.get();
-        const configToSave = currentDoc.exists ? currentDoc.data() : {};
+        const currentConfig = currentDoc.exists ? currentDoc.data() : {};
 
-        if (incomingConfig.ccaas) configToSave.ccaas = { ...configToSave.ccaas, host: incomingConfig.ccaas.host };
-        if (incomingConfig.directory) {
-            configToSave.directory = {
-                ...configToSave.directory, 
-                type: incomingConfig.directory.type,
-                adminEmail: incomingConfig.directory.adminEmail,
-                url: incomingConfig.directory.url,
-                bindDN: incomingConfig.directory.bindDN,
-                searchBase: incomingConfig.directory.searchBase,
-                tenantId: incomingConfig.directory.tenantId,
-                clientId: incomingConfig.directory.clientId,
-                entraIdEmailField: incomingConfig.directory.entraIdEmailField,
-            };
-        }
-        configToSave.mappings = incomingConfig.mappings;
-        configToSave.schedule = incomingConfig.schedule;
-        configToSave.syncRole = incomingConfig.syncRole;
-        
-        if (incomingConfig.ccaas && incomingConfig.ccaas.apiKey) {
-            configToSave.ccaas.apiKeySecretName = 'ccaas-api-key';
-            await _setSecret(configToSave.ccaas.apiKeySecretName, incomingConfig.ccaas.apiKey);
-        }
-        if (incomingConfig.directory) {
-            if (incomingConfig.directory.gcpKey) {
-                configToSave.directory.gcpKeySecretName = 'gcp-sa-key';
-                await _setSecret(configToSave.directory.gcpKeySecretName, incomingConfig.directory.gcpKey);
+        let configToSave, secretsToSet;
+        try {
+            ({ configToSave, secretsToSet } = buildConfigToSave(currentConfig, req.body));
+        } catch (error) {
+            if (error instanceof ConfigValidationError) {
+                return res.status(400).send(error.message);
             }
-            if (incomingConfig.directory.bindPassword) {
-                configToSave.directory.bindPasswordSecretName = 'ad-bind-password';
-                await _setSecret(configToSave.directory.bindPasswordSecretName, incomingConfig.directory.bindPassword);
-            }
-            if (incomingConfig.directory.clientSecret) {
-                configToSave.directory.clientSecretSecretName = 'entra-client-secret';
-                await _setSecret(configToSave.directory.clientSecretSecretName, incomingConfig.directory.clientSecret);
-            }
+            throw error;
         }
-        
-        await configDocRef.set(configToSave, { merge: true });
+
+        for (const { name, value } of secretsToSet) {
+            await _setSecret(name, value);
+        }
+
+        // Write the full document (no merge) so the stored config always matches
+        // exactly what was validated above.
+        await configDocRef.set(configToSave);
         await setupScheduler(configToSave.schedule);
+        console.log(`Configuration updated by ${req.user ? req.user.email : 'unknown'}`);
         res.status(200).send('Configuration saved successfully.');
-    } catch (error)        {
+    } catch (error) {
         console.error('Error saving config:', error);
-        res.status(500).send(`Error saving configuration: ${error.message}`);
+        res.status(500).send('Error saving configuration. Check the service logs for details.');
     }
 });
 

@@ -21,6 +21,7 @@ const FormData = require('form-data');
 const msal = require('@azure/msal-node');
 const { Client: GraphClient } = require('@microsoft/microsoft-graph-client');
 require("isomorphic-fetch");
+const { validateCcaasHost, validateLdapUrl } = require('./config-security');
 
 
 // --- CCaaS API Functions ---
@@ -30,8 +31,10 @@ async function _callCcaasApi(config, path, method = 'GET', body = null) {
     if (!host || !apiKey) {
         throw new Error('CCaaS host and API key are required.');
     }
-    const username = host.split('.')[0];
-    const url = `https://${host}${path}`;
+    // Re-validate at use time in case the stored value predates validation.
+    const safeHost = validateCcaasHost(host);
+    const username = safeHost.split('.')[0];
+    const url = `https://${safeHost}${path}`;
     const authHeader = 'Basic ' + Buffer.from(`${username}:${apiKey}`).toString('base64');
     const options = {
         method: method,
@@ -60,8 +63,10 @@ async function _callCcaasUploadApi(config, path, usersPayload) {
     if (!host || !apiKey) {
         throw new Error('CCaaS host and API key are required.');
     }
-    const username = host.split('.')[0];
-    const url = `https://${host}${path}`;
+    // Re-validate at use time in case the stored value predates validation.
+    const safeHost = validateCcaasHost(host);
+    const username = safeHost.split('.')[0];
+    const url = `https://${safeHost}${path}`;
     const authHeader = 'Basic ' + Buffer.from(`${username}:${apiKey}`).toString('base64');
 
     const form = new FormData();
@@ -105,11 +110,11 @@ async function getCcaasJobs(config) {
 }
 
 async function getCcaasJobStatus(config, jobId) {
-    return await _callCcaasApi(config, `/apps/api/v1/bulk/users/jobs/${jobId}`);
+    return await _callCcaasApi(config, `/apps/api/v1/bulk/users/jobs/${encodeURIComponent(jobId)}`);
 }
 
 async function getCcaasSchemeErrors(config, jobId) {
-    return await _callCcaasApi(config, `/apps/api/v1/bulk/users/errors/scheme/${jobId}`);
+    return await _callCcaasApi(config, `/apps/api/v1/bulk/users/errors/scheme/${encodeURIComponent(jobId)}`);
 }
 
 async function proceedCcaasJob(config, jobId) {
@@ -197,7 +202,7 @@ async function testActiveDirectoryConnection(directoryConfig) {
     if (!directoryConfig.url || !directoryConfig.bindDN || !directoryConfig.bindPassword) {
         throw new Error('LDAP URL, Bind DN, and Bind Password are required.');
     }
-    const client = new Client({ url: directoryConfig.url });
+    const client = new Client({ url: validateLdapUrl(directoryConfig.url) });
     try {
         await client.bind(directoryConfig.bindDN, directoryConfig.bindPassword);
     } catch (e) {
@@ -244,7 +249,7 @@ async function getActiveDirectoryGroups(directoryConfig) {
     if (!directoryConfig.url || !directoryConfig.bindDN || !directoryConfig.bindPassword || !directoryConfig.searchBase) {
         throw new Error('LDAP URL, Bind DN, Bind Password, and Search Base are required for fetching groups.');
     }
-    const client = new Client({ url: directoryConfig.url });
+    const client = new Client({ url: validateLdapUrl(directoryConfig.url) });
     try {
         await client.bind(directoryConfig.bindDN, directoryConfig.bindPassword);
         const { searchEntries } = await client.search(directoryConfig.searchBase, {
@@ -328,7 +333,7 @@ async function getGoogleWorkspaceGroupMembers(groupName, directoryConfig) {
 
 async function getActiveDirectoryGroupMembers(groupName, directoryConfig) {
     const { url, bindDN, bindPassword, searchBase } = directoryConfig;
-    const client = new Client({ url });
+    const client = new Client({ url: validateLdapUrl(url) });
     try {
         await client.bind(bindDN, bindPassword);
 

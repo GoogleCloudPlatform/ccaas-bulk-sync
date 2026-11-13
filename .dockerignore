@@ -1,0 +1,17 @@
+# This file tells Docker which files and directories to ignore when building the image.
+# This prevents large, unnecessary, or sensitive files from being included.
+
+# Dependency directory (these are installed inside the container)
+node_modules
+
+# Log files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Git and other version control files
+.git
+.gitignore
+
+# Local environment files
+.env

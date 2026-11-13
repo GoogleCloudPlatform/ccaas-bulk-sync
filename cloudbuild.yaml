@@ -37,9 +37,15 @@ steps:
       - '${_SERVICE_ACCOUNT}'
       - '--platform'
       - 'managed'
-      - '--allow-unauthenticated'
-      - '--set-env-vars'
-      - 'SERVICE_ACCOUNT=${_SERVICE_ACCOUNT}' # Set initial env var
+      # Security: the service must never be publicly invokable. Interactive
+      # users reach it only through the HTTPS load balancer protected by IAP,
+      # and Cloud Scheduler calls it with an OIDC token (roles/run.invoker).
+      - '--no-allow-unauthenticated'
+      - '--ingress'
+      - 'internal-and-cloud-load-balancing'
+      # Use --update-env-vars (not --set-env-vars) so redeploys keep IAP_AUDIENCE.
+      - '--update-env-vars'
+      - 'SERVICE_ACCOUNT=${_SERVICE_ACCOUNT}'
 
   # Get the URL of the deployed service and update it with the SERVICE_URL env var
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
