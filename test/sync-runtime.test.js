@@ -95,17 +95,32 @@ test('sync lock: stale holder release does not remove a newer lock', async () =>
 
 // --- Pagination --------------------------------------------------------------
 
-test('getAllCcaasUsers follows pages until a short page', async () => {
+test('getAllCcaasUsers follows pages until an empty page', async () => {
     fetchCalls.length = 0;
     fetchHandler = async (url) => {
         const page = Number(new URL(url).searchParams.get('page'));
-        const size = page < 3 ? 1000 : 7;
-        return jsonResponse(Array.from({ length: size }, (_, i) => ({ email: `u${page}-${i}@x.com` })));
+        const size = page <= 3 ? 1000 : (page === 4 ? 7 : 0);
+        return jsonResponse(Array.from({ length: size }, (_, i) => ({ id: `${page}-${i}`, email: `u${page}-${i}@x.com` })));
     };
     const users = await syncLogic.getAllCcaasUsers(CONFIG);
-    assert.strictEqual(users.length, 2007);
-    assert.strictEqual(fetchCalls.length, 3);
+    assert.strictEqual(users.length, 3007);
+    assert.strictEqual(fetchCalls.length, 5);
     assert.match(fetchCalls[0], /^https:\/\/acme\.ccaiplatform\.com\/apps\/api\/v1\/users\?page=1&per=1000$/);
+});
+
+test('getAllCcaasUsers handles an API that caps the page size below `per` (e.g. 100)', async () => {
+    fetchHandler = async (url) => {
+        const page = Number(new URL(url).searchParams.get('page'));
+        const size = page <= 2 ? 100 : (page === 3 ? 42 : 0);
+        return jsonResponse(Array.from({ length: size }, (_, i) => ({ id: `${page}-${i}` })));
+    };
+    const users = await syncLogic.getAllCcaasUsers(CONFIG);
+    assert.strictEqual(users.length, 242);
+});
+
+test('getAllCcaasUsers aborts if the API ignores the page parameter', async () => {
+    fetchHandler = async () => jsonResponse([{ id: 1 }, { id: 2 }]);
+    await assert.rejects(syncLogic.getAllCcaasUsers(CONFIG), /same page twice/);
 });
 
 test('getAllCcaasUsers rejects a non-array response', async () => {

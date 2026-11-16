@@ -147,16 +147,29 @@ async function getCcaasDetails(config) {
     return { teams, roles };
 }
 
-/** Fetches every CCaaS user, following pagination (`page` / `per`). */
+/**
+ * Fetches every CCaaS user, following pagination (`page` / `per`).
+ *
+ * Keeps requesting pages until one comes back empty, rather than stopping at
+ * the first page shorter than `per`, because the API may cap the page size
+ * below what was asked for. Stops with an error if the API ignores `page` and
+ * keeps returning the same records.
+ */
 async function getAllCcaasUsers(config) {
     const all = [];
+    let previousFirstKey = null;
     for (let page = 1; page <= MAX_PAGES; page++) {
         const batch = await _callCcaasApi(config, `/apps/api/v1/users?page=${page}&per=${CCAAS_PAGE_SIZE}`);
         if (!Array.isArray(batch)) {
             throw new Error('Unexpected response from CCaaS users API (expected an array).');
         }
+        if (batch.length === 0) return all;
+        const firstKey = String(batch[0].id ?? batch[0].email);
+        if (firstKey === previousFirstKey) {
+            throw new Error('CCaaS users API returned the same page twice; pagination is not working. Sync aborted.');
+        }
+        previousFirstKey = firstKey;
         all.push(...batch);
-        if (batch.length < CCAAS_PAGE_SIZE) return all;
     }
     throw new Error(`CCaaS users API returned more than ${MAX_PAGES} pages; aborting.`);
 }
