@@ -20,7 +20,7 @@
     "googleapis": "^137.1.0",
     "isomorphic-fetch": "^3.0.0",
     "ldapts": "^4.1.0",
-    "node-fetch": "^2.7.0"
+    "node-fetch": "^3.3.2"
   },
   "devDependencies": {
     "autoprefixer": "^10.4.19",
