@@ -126,3 +126,11 @@ test('local dev bypass works off Cloud Run', async () => {
     const r = await run({ headers: {} });
     assert.strictEqual(r.nextCalled, true);
 });
+
+test('scheduler token parsing rejects malformed and oversized headers quickly', async () => {
+    for (const h of [undefined, '', 'Basic abc', 'Bearer ', 'Bearer' + ' '.repeat(50000) + 'x', 'Bearer ' + 'a'.repeat(9000)]) {
+        const start = Date.now();
+        await assert.rejects(auth.verifySchedulerToken(h, SA));
+        assert.ok(Date.now() - start < 200, 'should fail fast');
+    }
+});

@@ -96,11 +96,15 @@ async function verifySchedulerToken(authorizationHeader, expectedEmail) {
     if (!expectedEmail) {
         throw new Error('SERVICE_ACCOUNT is not configured.');
     }
-    const match = /^Bearer\s+(.+)$/i.exec(authorizationHeader || '');
-    if (!match) {
+    // Parse without a regex to avoid super-linear backtracking on crafted headers.
+    const header = String(authorizationHeader || '');
+    if (header.length > 8192 || header.slice(0, 7).toLowerCase() !== 'bearer ') {
         throw new Error('Missing bearer token.');
     }
-    const token = match[1].trim();
+    const token = header.slice(7).trim();
+    if (!token) {
+        throw new Error('Missing bearer token.');
+    }
     const parts = token.split('.');
     if (parts.length !== 3) {
         throw new Error('Malformed bearer token.');
@@ -167,7 +171,7 @@ async function requireAuth(req, res, next) {
         }
     }
 
-    console.warn(`Rejected unauthenticated request to ${req.method} ${req.originalUrl}`);
+    console.warn('Rejected unauthenticated request to %s %s', req.method, req.originalUrl);
     return res.status(401).send('Unauthorized.');
 }
 
