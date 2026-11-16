@@ -413,6 +413,33 @@
             </div>
         </div>
 
+        <!-- Sync Run History -->
+        <div class="bg-white p-6 rounded-xl shadow-lg">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-semibold text-gray-700">Recent Sync Runs</h2>
+                <button @click="fetchRuns" :disabled="isLoadingRuns" class="px-3 py-1 text-xs bg-gray-200 text-gray-700 font-semibold rounded-lg hover:bg-gray-300 disabled:opacity-50">Refresh</button>
+            </div>
+            <p v-if="!runs.length" class="text-sm text-gray-500">No sync runs recorded yet.</p>
+            <div v-else class="overflow-x-auto">
+                <table class="min-w-full text-xs">
+                    <thead class="text-left text-gray-500 border-b">
+                        <tr><th class="py-2 pr-3">Started (local)</th><th class="pr-3">Trigger</th><th class="pr-3">Type</th><th class="pr-3">Outcome</th><th class="pr-3">Add / Update / Deactivate</th><th class="pr-3">Job</th><th class="pr-3">Duration</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="run in runs" :key="run.id" class="border-b last:border-0 align-top" :title="run.message">
+                            <td class="py-2 pr-3 whitespace-nowrap">{{ new Date(run.startedAt).toLocaleString() }}</td>
+                            <td class="pr-3">{{ run.trigger }}<div class="text-gray-400">{{ run.startedBy }}</div></td>
+                            <td class="pr-3">{{ run.simulate ? 'Simulation' : 'Live' }}</td>
+                            <td class="pr-3"><span class="px-2 py-0.5 rounded-full font-semibold" :class="runOutcomeClass(run.outcome)">{{ run.outcome.replace(/_/g, ' ') }}</span></td>
+                            <td class="pr-3 font-mono">{{ run.counts ? `${run.counts.add} / ${run.counts.update} / ${run.counts.deactivate}` : '-' }}</td>
+                            <td class="pr-3 font-mono">{{ run.jobId || '-' }}</td>
+                            <td class="pr-3">{{ (run.durationMs / 1000).toFixed(1) }}s</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
         <!-- Modals -->
         <transition name="fade">
             <div v-if="showSyncModal" class="modal-backdrop">

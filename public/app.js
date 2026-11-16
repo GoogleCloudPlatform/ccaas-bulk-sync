@@ -203,6 +203,7 @@ createApp({
                 syncResultModal.value = { show: true, title: 'Sync Error', message: error.message, status: 'error', preview: null, warnings: [], canOverride: false };
             } finally {
                 isSyncing.value = false;
+                fetchRuns();
             }
         };
 
@@ -306,6 +307,26 @@ createApp({
             } finally {
                 isTestingConnection.value = false;
             }
+        };
+
+        const runs = ref([]);
+        const isLoadingRuns = ref(false);
+        const fetchRuns = async () => {
+            isLoadingRuns.value = true;
+            try {
+                const response = await fetch(`${window.location.origin}/api/sync-runs?limit=20`);
+                if (response.ok) runs.value = await response.json();
+            } catch (error) {
+                console.error('Failed to load sync runs:', error);
+            } finally {
+                isLoadingRuns.value = false;
+            }
+        };
+        const runOutcomeClass = (outcome) => {
+            if (['job_finished', 'no_changes'].includes(outcome)) return 'bg-green-100 text-green-800';
+            if (outcome === 'simulated') return 'bg-blue-100 text-blue-800';
+            if (['blocked', 'group_not_found', 'in_progress'].includes(outcome)) return 'bg-yellow-100 text-yellow-800';
+            return 'bg-red-100 text-red-800';
         };
 
         const fetchJobs = async () => {
@@ -457,6 +478,7 @@ createApp({
 
         onMounted(() => {
             fetchMe();
+            fetchRuns();
             fetchConfig();
         });
 
@@ -480,6 +502,10 @@ createApp({
             showGcpHelpModal,
             showSyncModal,
             syncResultModal,
+            runs,
+            isLoadingRuns,
+            fetchRuns,
+            runOutcomeClass,
             me,
             isAdmin,
             confirmLargeDeactivation,
