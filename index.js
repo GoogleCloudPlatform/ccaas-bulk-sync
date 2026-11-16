@@ -27,6 +27,7 @@ const { requireAuth } = require('./auth');
 const { roleFor, requireAdmin, requireSyncPermission, isAdminListConfigured, warnIfAdminListMissing } = require('./authz');
 const { buildConfigToSave, ConfigValidationError, redactConfig } = require('./config-security');
 const { acquireSyncLock, SyncInProgressError } = require('./sync-lock');
+const runHistory = require('./run-history');
 const { SyncSafetyError, DEFAULT_MAX_DEACTIVATIONS } = require('./sync-plan');
 
 const app = express();
@@ -204,40 +205,60 @@ app.post('/api/config', requireAdmin, async (req, res) => {
 
 app.post('/api/sync', requireSyncPermission, async (req, res) => {
     const simulate = req.body?.simulate === true;
-    // Only an interactive admin (via IAP) can override the deactivation limit,
-    // never the scheduler.
-    const allowLargeDeactivation = req.body?.allowLargeDeactivation === true && req.user?.type !== 'scheduler';
+    const isScheduler = req.user?.type === 'scheduler'
+        || (!!process.env.SERVICE_ACCOUNT && (req.user?.email || '').toLowerCase() === process.env.SERVICE_ACCOUNT.toLowerCase());
+    // Only an interactive admin can override the deactivation limit, never the scheduler.
+    const allowLargeDeactivation = req.body?.allowLargeDeactivation === true && !isScheduler;
     const startedBy = req.user?.email || 'unknown';
+    const trigger = isScheduler ? 'scheduled' : 'manual';
+    const startedAt = Date.now();
     let lock = null;
+
+    const finish = async (fields) => {
+        const record = runHistory.buildRunRecord({ startedAt, finishedAt: Date.now(), trigger, startedBy, simulate, ...fields });
+        runHistory.logRun(record);
+        await runHistory.recordRun(firestore, record);
+    };
+
     try {
         const config = await _getHydratedConfig();
         if (!config) return res.status(400).send('Configuration must be saved before running a sync.');
         if (!simulate) {
             lock = await acquireSyncLock(firestore, { startedBy });
         }
-        console.log(`Sync requested by ${startedBy} (simulate=${simulate}, allowLargeDeactivation=${allowLargeDeactivation}).`);
+        console.log('Sync requested by %s (trigger=%s, simulate=%s, allowLargeDeactivation=%s).', startedBy, trigger, simulate, allowLargeDeactivation);
         const result = await syncLogic.runSync(config, { simulate, allowLargeDeactivation });
+        await finish({ result });
         res.status(200).json(result);
     } catch (error) {
         if (error instanceof SyncInProgressError) {
-            console.warn(error.message);
+            await finish({ outcome: 'in_progress', error });
             return res.status(409).send(error.message);
         }
         if (error instanceof SyncSafetyError) {
-            console.warn(`Sync blocked by safety check: ${error.message}`);
+            await finish({ outcome: 'blocked', error, extra: { blockedReason: error.details.reason || null } });
             return res.status(422).json({ blocked: true, reason: error.details.reason, message: error.message, ...error.details });
         }
         if (error instanceof syncLogic.GroupNotFoundError) {
-            console.warn(error.message);
+            await finish({ outcome: 'group_not_found', error });
             return res.status(422).send(error.message);
         }
         console.error('Error during sync:', error);
+        await finish({ outcome: 'error', error });
         res.status(500).send(`Error during sync: ${error.message}`);
     } finally {
         if (lock) await lock.release();
     }
 });
 
+app.get('/api/sync-runs', async (req, res) => {
+    try {
+        res.status(200).json(await runHistory.listRuns(firestore, req.query.limit));
+    } catch (error) {
+        console.error('Error listing sync runs:', error);
+        res.status(500).send('Error listing sync runs.');
+    }
+});
 
 app.post('/api/ccaas-details', async (req, res) => {
     try {

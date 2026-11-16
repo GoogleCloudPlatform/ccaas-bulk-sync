@@ -535,10 +535,12 @@ async function runSync(config, options = {}, deps = {}) {
     const combinedPayload = [...usersToAdd, ...usersToDelete, ...usersToUpdate];
     let jobId = null;
     let message = `Sync complete. Users to add: ${counts.add}, to update: ${counts.update}, to deactivate: ${counts.deactivate}. No changes to submit.`;
+    let outcome = simulate ? 'simulated' : 'no_changes';
 
     if (combinedPayload.length > 0) {
         if (simulate) {
             message = `Simulation complete. Users to add: ${counts.add}, to update: ${counts.update}, to deactivate: ${counts.deactivate}.`;
+            outcome = 'simulated';
             if (blockedBy) message += ` WARNING: a live sync would be blocked: ${blockedBy}`;
         } else {
             console.log("Submitting combined payload to CCaaS bulk upload...");
@@ -567,6 +569,7 @@ async function runSync(config, options = {}, deps = {}) {
                         }
                     }
                     message = errorMessage;
+                    outcome = 'job_failed';
                     finalStateReached = true;
                     break;
                 }
@@ -584,6 +587,7 @@ async function runSync(config, options = {}, deps = {}) {
                     } else if (jobStatus.status === 'finished' || jobStatus.status === 'completed') {
                         console.log(`Job ID: ${jobId} has finished successfully (skipped in_progress).`);
                         message = `Sync job ${jobId} finished successfully. Users to add: ${usersToAdd.length}, to update: ${usersToUpdate.length}, to deactivate: ${usersToDelete.length}.`;
+                        outcome = 'job_finished';
                         finalStateReached = true;
                         break;
                     }
@@ -591,6 +595,7 @@ async function runSync(config, options = {}, deps = {}) {
                     if (jobStatus.status === 'finished' || jobStatus.status === 'completed') {
                         console.log(`Job ID: ${jobId} has finished successfully.`);
                         message = `Sync job ${jobId} finished successfully. Users to add: ${usersToAdd.length}, to update: ${usersToUpdate.length}, to deactivate: ${usersToDelete.length}.`;
+                        outcome = 'job_finished';
                         finalStateReached = true;
                         break;
                     }
@@ -604,13 +609,14 @@ async function runSync(config, options = {}, deps = {}) {
             if (!finalStateReached) {
                 console.log(`Job ID: ${jobId} timed out. Last state: ${jobState}.`);
                 message = `Sync job ${jobId} timed out while in state '${jobState}'. Please check CCaaS job logs.`;
+                outcome = 'job_timeout';
             }
         }
     } else {
         console.log("No users to add or update.");
     }
 
-    return { message, simulate, counts, preview, warnings, blockedBy, jobId };
+    return { message, outcome, simulate, counts, preview, warnings, blockedBy, jobId };
 }
 
 

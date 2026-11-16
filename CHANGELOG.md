@@ -2,6 +2,8 @@
 
 ## Unreleased (1.4.0)
 ### Added
+- **Sync run history:** every sync (scheduled or manual, live or simulated, including blocked and failed runs) is recorded in Firestore (`ccaas-sync-runs`; newest 200 kept) with trigger, user, outcome, counts, job ID and duration. No user emails or names are stored. New `GET /api/sync-runs` and a **Recent Sync Runs** table in the UI.
+- **Structured run log:** one JSON log line per run (`event: sync_run`, with `severity` and `outcome`) for Cloud Logging metrics and alerts.
 - **Keyless Google Workspace sync:** domain-wide delegation without a stored service account key. The service account signs the delegation JWT with the IAM Credentials `signJwt` API (needs `roles/iam.serviceAccountTokenCreator` on itself), and tokens are cached until close to expiry. Selectable in the UI. Existing key-based configs keep using their key until switched. See README "Google Workspace without a stored key".
 
 ## 1.3.0: Hardening and CI
