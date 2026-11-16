@@ -24,6 +24,8 @@ npm test
 
 ## Deployment
 
+> **Prefer Terraform?** [`terraform/`](terraform/README.md) deploys everything below, in either IAP mode, with the same least-privilege setup.
+
 Each step below reuses the shell variables set in earlier steps, so run them all in the same terminal session.
 
 ### 1. Enable Google Cloud APIs
@@ -340,6 +342,7 @@ Deployments that already use a service account JSON key keep using it until an a
   ```bash
   PROJECT_ID=$PROJECT_ID SERVICE_NAME=$SERVICE_NAME NOTIFY_EMAIL=ops@example.com ./scripts/setup-alerts.sh
   ```
+  New alert policies can take a few minutes to become active.
 
 ## Sync safety
 

@@ -1,0 +1,15 @@
+project_id = "my-project"
+region     = "us-central1"
+image      = "us-central1-docker.pkg.dev/my-project/ccaas-sync-repo/ccaas-sync-service:v1.4.0"
+
+# "cloud_run" (IAP directly on Cloud Run, no load balancer) or "load_balancer"
+iap_mode = "cloud_run"
+# domain = "sync.example.com"   # load_balancer mode only
+
+iap_members  = ["user:alice@example.com", "group:ccaas-admins@example.com"]
+admin_emails = ["alice@example.com"]
+
+# cloud_run mode: OAuth client trusted by IAP for Cloud Scheduler (create in the Console, then apply again)
+# scheduler_oauth_client_id = "123456789-abc.apps.googleusercontent.com"
+
+# notify_email = "ops@example.com"

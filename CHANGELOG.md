@@ -3,6 +3,7 @@
 ## Unreleased (1.4.0)
 ### Added
 - **Sync run history:** every sync (scheduled or manual, live or simulated, including blocked and failed runs) is recorded in Firestore (`ccaas-sync-runs`; newest 200 kept) with trigger, user, outcome, counts, job ID and duration. No user emails or names are stored. New `GET /api/sync-runs` and a **Recent Sync Runs** table in the UI.
+- **Terraform module (`terraform/`):** deploys the whole stack (APIs, Firestore, Artifact Registry, empty secrets, least-privilege service account, Cloud Run, IAP in either `cloud_run` or `load_balancer` mode, optional alerts). Credentials never enter Terraform state. CI runs `terraform fmt` and `terraform validate`.
 - **Health check:** `GET /healthz` (no auth) returns status and version; checked in CI.
 - **Alerts:** `scripts/setup-alerts.sh` creates an email channel and two alert policies: live sync failed or blocked; no successful scheduled sync for N hours.
 - **Structured run log:** one JSON log line per run (`event: sync_run`, with `severity` and `outcome`) for Cloud Logging metrics and alerts.
