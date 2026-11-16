@@ -16,7 +16,6 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const path = require('node:path');
 
 // --- Fakes -------------------------------------------------------------------
 
@@ -40,17 +39,15 @@ function fakeFirestore() {
     };
 }
 
-// Replace node-fetch before sync-logic loads it.
+// Stub the global fetch (Node.js 22 built-in) that sync-logic uses.
 const fetchCalls = [];
 let fetchHandler = null;
-const nodeFetchPath = require.resolve('node-fetch', { paths: [path.join(__dirname, '..')] });
-require.cache[nodeFetchPath] = {
-    id: nodeFetchPath, filename: nodeFetchPath, loaded: true,
-    exports: async (url, options) => {
-        fetchCalls.push(url);
-        return fetchHandler(url, options);
-    },
+const realFetch = globalThis.fetch;
+globalThis.fetch = async (url, options) => {
+    fetchCalls.push(url);
+    return fetchHandler(url, options);
 };
+test.after(() => { globalThis.fetch = realFetch; });
 const syncLogic = require('../sync-logic');
 const { acquireSyncLock, SyncInProgressError } = require('../sync-lock');
 
@@ -188,4 +185,18 @@ test('runSync aborts when the directory returns no users at all', async () => {
     await assert.rejects(
         syncLogic.runSync({ ...BASE, safety: { maxDeactivations: 1000 } }, { simulate: false, allowLargeDeactivation: true }, deps),
         /returned no users/);
+});
+
+test('bulk upload sends a multipart file named users.json with Basic auth', async () => {
+    let captured;
+    fetchHandler = async (url, options) => { captured = { url, options }; return jsonResponse({ id: 'job-1' }); };
+    const { _callCcaasUploadApi } = syncLogic;
+    await _callCcaasUploadApi(CONFIG, '/apps/api/v1/bulk/users/upload', [{ email: 'a@x.com' }]);
+    assert.match(captured.url, /\/apps\/api\/v1\/bulk\/users\/upload$/);
+    assert.match(captured.options.headers.Authorization, /^Basic /);
+    assert.ok(captured.options.body instanceof FormData);
+    const file = captured.options.body.get('file');
+    assert.strictEqual(file.name, 'users.json');
+    assert.strictEqual(file.type, 'application/json');
+    assert.deepStrictEqual(JSON.parse(await file.text()), [{ email: 'a@x.com' }]);
 });

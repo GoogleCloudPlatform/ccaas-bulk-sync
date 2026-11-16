@@ -9,19 +9,16 @@
     "build:css": "tailwindcss -i ./public/input.css -o ./public/output.css"
   },
   "dependencies": {
-    "@azure/msal-node": "^2.6.0",
-    "@google-cloud/firestore": "^7.7.0",
-    "@google-cloud/scheduler": "^5.2.0",
-    "@google-cloud/secret-manager": "^5.5.0",
-    "@microsoft/microsoft-graph-client": "^3.0.7",
-    "express": "^4.19.2",
-    "express-rate-limit": "^7.5.1",
-    "form-data": "^4.0.0",
-    "google-auth-library": "^9.10.0",
-    "googleapis": "^137.1.0",
-    "isomorphic-fetch": "^3.0.0",
-    "ldapts": "^4.1.0",
-    "node-fetch": "^2.7.0"
+    "@azure/msal-node": "^7.2.2",
+    "@google-cloud/firestore": "^9.4.1",
+    "@google-cloud/scheduler": "^6.2.0",
+    "@google-cloud/secret-manager": "^8.0.0",
+    "@microsoft/microsoft-graph-client": "^3.1.0",
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.7.4",
+    "google-auth-library": "^11.3.4",
+    "googleapis": "^190.0.0",
+    "ldapts": "^9.2.0"
   },
   "devDependencies": {
     "autoprefixer": "^10.4.19",
