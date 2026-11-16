@@ -246,10 +246,10 @@ IAP decides who can open the app. `ADMIN_EMAILS` decides who can **change** thin
 
 ```bash
 gcloud run services update $SERVICE_NAME --region=$REGION \
-  --update-env-vars=^@^ADMIN_EMAILS=alice@example.com,bob@example.com,domain:ops.example.com
+  --update-env-vars='^;^ADMIN_EMAILS=alice@example.com,bob@example.com,domain:ops.example.com'
 ```
 
-Entries are email addresses or `domain:<domain>`. The `^@^` prefix tells gcloud to use `@` as the separator between variables, so the commas stay inside the value. The scheduler's service account can always run scheduled syncs. **If `ADMIN_EMAILS` is not set, every IAP user is an admin** (the behavior before 1.3.0). The UI shows a warning when this is the case.
+Entries are email addresses or `domain:<domain>`. The `^;^` prefix tells gcloud to use `;` as the separator between variables, so the commas stay inside the value. The scheduler's service account can always run scheduled syncs. **If `ADMIN_EMAILS` is not set, every IAP user is an admin** (the behavior before 1.3.0). The UI shows a warning when this is the case.
 
 ### Option B: IAP directly on Cloud Run (no load balancer)
 
