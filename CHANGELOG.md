@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased (1.3.0)
+## 1.3.0: Hardening and CI
+
+### Upgrade notes
+1. Redeploy (README step 5).
+2. **Set `ADMIN_EMAILS`** (README step 8). Until it's set, every IAP user stays an admin, and the UI shows a warning.
+3. **Tighten the service account's permissions** (README "Upgrading > To 1.3.0"): grant the per-secret roles and the custom scheduler role, then remove the old project-wide roles.
+4. Open the UI and click **Save** once.
+
 ### Security
 - CI on every PR: unit tests, `npm audit` (fails on high or critical), Docker build and container startup smoke test; Dependabot; CodeQL; branch protection on `main`.
 - Fixed CodeQL findings: user-controlled values in log format strings, a slow regex in Bearer header parsing, and missing rate limiting (now 120 requests/min per IP on `/api`, 600/min on static files). Job IDs are validated.
