@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.1: Container startup fix
+### Fixed
+- **The container failed to start in v1.0.1 and v1.1.0** (`Cannot find module './config-security'`). The Dockerfile copied only `index.js` and `sync-logic.js` into the production image, leaving out the modules added in those releases (`auth.js`, `config-security.js`, `sync-plan.js`, `sync-lock.js`). It now copies every top-level `.js` module.
+- Cloud Run keeps serving the previous revision when a new one fails to start. **If you deployed v1.0.1 or v1.1.0, check that the new revision is actually serving.** If it isn't, you are still running the pre-1.0.1 code, which is affected by GHSA-47vv-vx4f-pm44. Deploy v1.1.1.
+### Added
+- A packaging test that fails if the Dockerfile leaves out any module `index.js` loads.
+
 ## 1.1.0: Sync safety
 
 ### Fixed

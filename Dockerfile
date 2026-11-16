@@ -36,8 +36,8 @@ WORKDIR /usr/src/app
 COPY --from=builder /usr/src/app/package*.json ./
 COPY --from=builder /usr/src/app/node_modules ./node_modules
 COPY --from=builder /usr/src/app/public ./public
-COPY --from=builder /usr/src/app/index.js ./
-COPY --from=builder /usr/src/app/sync-logic.js ./
+# Copy every top-level application module (index.js, auth.js, sync-*.js, ...).
+COPY --from=builder /usr/src/app/*.js ./
 
 EXPOSE 8080
 
