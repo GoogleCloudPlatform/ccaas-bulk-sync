@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.0: IAP directly on Cloud Run, secret redaction
+### Security
+- **`GET /api/config` no longer returns secret values.** Earlier versions stored some credentials (CCaaS API key, service account JSON key) in plaintext in the Firestore config, and `GET /api/config` returned them; it removed only the Secret Manager references. All secret values and references are now removed from responses.
+- **Saving the config now removes leftover plaintext secrets from Firestore,** moving them into Secret Manager first if they aren't already there. **Upgrade, then click Save once.** If your deployment ever stored credentials in Firestore, rotate them: they were visible to signed-in users, and before 1.1.1 to anyone on the internet (see GHSA-47vv-vx4f-pm44).
+
+### Added
+- **IAP directly on Cloud Run (no load balancer):** new `_INGRESS` Cloud Build setting (default `internal-and-cloud-load-balancing`; use `all` with IAP on the service) and new `SCHEDULER_OIDC_AUDIENCE` setting, so Cloud Scheduler's token gets through IAP. See README "Option B".
+
 ## 1.1.2: CCaaS pagination fix
 ### Fixed
 - **CCaaS users are now read across every page.** The CCaaS users API returns at most 100 records per page, even when `per=1000` is requested. Versions 1.1.0 and 1.1.1 stopped at the first page shorter than 1000, so they still read only the first 100 users. Pagination now continues until an empty page, and the sync aborts if the API returns the same page twice.

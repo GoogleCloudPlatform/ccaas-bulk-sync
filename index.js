@@ -21,7 +21,7 @@ const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
 const path = require('path');
 const syncLogic = require('./sync-logic');
 const { requireAuth } = require('./auth');
-const { buildConfigToSave, ConfigValidationError } = require('./config-security');
+const { buildConfigToSave, ConfigValidationError, redactConfig } = require('./config-security');
 const { acquireSyncLock, SyncInProgressError } = require('./sync-lock');
 const { SyncSafetyError, DEFAULT_MAX_DEACTIVATIONS } = require('./sync-plan');
 
@@ -135,13 +135,8 @@ app.get('/api/config', async (req, res) => {
             safety: { ...defaultConfig.safety, ...storedConfig.safety },
         };
         
-        delete configToReturn.ccaas.apiKeySecretName;
-        delete configToReturn.directory.gcpKeySecretName;
-        delete configToReturn.directory.bindPasswordSecretName;
-        delete configToReturn.directory.clientSecretSecretName;
-
-
-        res.status(200).json(configToReturn);
+        // Never send secret values (or references) to the browser.
+        res.status(200).json(redactConfig(configToReturn));
     } catch (error) {
         console.error('Error fetching config:', error);
         res.status(500).send('Error fetching configuration.');
@@ -384,14 +379,22 @@ async function setupScheduler(scheduleConfig = { type: 'manual' }) {
         return;
     }
 
+    // When IAP is turned on directly on the Cloud Run service, IAP only accepts
+    // Google-signed ID tokens whose audience is an OAuth client ID it trusts
+    // (IAP "programmatic clients"). Set SCHEDULER_OIDC_AUDIENCE to that client
+    // ID. Leave it unset for the load balancer setup, where Cloud Run IAM checks
+    // the token and the default audience (the target URL) is correct.
+    const oidcToken = { serviceAccountEmail: cloudRunSaEmail };
+    if (process.env.SCHEDULER_OIDC_AUDIENCE) {
+        oidcToken.audience = process.env.SCHEDULER_OIDC_AUDIENCE;
+    }
+
     const job = {
         name: jobName,
         httpTarget: {
             uri: `${serviceUrl}/api/sync`,
             httpMethod: 'POST',
-            oidcToken: {
-                serviceAccountEmail: cloudRunSaEmail,
-            },
+            oidcToken,
         },
         schedule: cronSchedule,
         timeZone: 'UTC',

@@ -37,12 +37,15 @@ steps:
       - '${_SERVICE_ACCOUNT}'
       - '--platform'
       - 'managed'
-      # Security: the service must never be publicly invokable. Interactive
-      # users reach it only through the HTTPS load balancer protected by IAP,
-      # and Cloud Scheduler calls it with an OIDC token (roles/run.invoker).
+      # Security: the service must never be publicly invokable.
+      # - Load balancer + IAP (default): _INGRESS=internal-and-cloud-load-balancing.
+      #   Users come through the IAP-protected load balancer, and Cloud Scheduler
+      #   calls with an OIDC token (roles/run.invoker).
+      # - IAP directly on Cloud Run: _INGRESS=all. IAP on the service authenticates
+      #   every request (see README "Option B").
       - '--no-allow-unauthenticated'
       - '--ingress'
-      - 'internal-and-cloud-load-balancing'
+      - '${_INGRESS}'
       # A live sync polls the CCaaS bulk job for several minutes; keep this in
       # line with SCHEDULER_ATTEMPT_DEADLINE_SECONDS in index.js.
       - '--timeout'
@@ -71,4 +74,5 @@ substitutions:
   _REGION: 'us-central1'
   _REPO_NAME: 'ccaas-sync-repo'
   _SERVICE_NAME: 'ccaas-sync-service'
+  _INGRESS: 'internal-and-cloud-load-balancing'
 

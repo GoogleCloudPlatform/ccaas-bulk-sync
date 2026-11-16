@@ -5,7 +5,7 @@ Keeps users in Google Cloud Contact Center as a Service (CCaaS) in sync with gro
 It runs on Cloud Run, stores its configuration in Firestore and its credentials in Secret Manager, uses Cloud Scheduler for scheduled syncs, and is protected by Identity-Aware Proxy (IAP).
 
 - [Local development](#local-development)
-- [Deployment](#deployment)
+- [Deployment](#deployment) (load balancer + IAP, or [IAP directly on Cloud Run](#option-b-iap-directly-on-cloud-run-no-load-balancer))
 - [Sync safety](#sync-safety)
 - [Upgrading](#upgrading)
 - [Appendix: Microsoft Entra ID setup](#appendix-microsoft-entra-id-setup)
@@ -234,6 +234,52 @@ gcloud run services update $SERVICE_NAME \
   --region=$REGION \
   --update-env-vars=IAP_AUDIENCE=/projects/${PROJECT_NUMBER}/global/backendServices/${BACKEND_ID}
 ```
+
+### Option B: IAP directly on Cloud Run (no load balancer)
+
+Instead of steps 6 and 7, you can turn on IAP directly on the Cloud Run service. This needs no load balancer, domain, certificate or static IP. Users sign in at the service's `run.app` URL.
+
+1. **Deploy with ingress `all`.** Run [step 5](#5-build-and-deploy) with `_INGRESS=all` added to `--substitutions`. IAP on the service authenticates every request, and the app still verifies IAP's signed header.
+2. **Turn on IAP and allow it to call the service:**
+   ```bash
+   gcloud beta services identity create --service=iap.googleapis.com --project=$PROJECT_ID
+
+   gcloud run services add-iam-policy-binding $SERVICE_NAME --region=$REGION \
+     --member="serviceAccount:service-${PROJECT_NUMBER}@gcp-sa-iap.iam.gserviceaccount.com" \
+     --role="roles/run.invoker"
+
+   gcloud beta run services update $SERVICE_NAME --region=$REGION --iap \
+     --update-env-vars=IAP_AUDIENCE=/projects/${PROJECT_NUMBER}/locations/${REGION}/services/${SERVICE_NAME}
+   ```
+3. **Grant access** to admins and to the application's service account. Scheduled syncs go through IAP too, so the service account needs access as well.
+   ```bash
+   for member in user:your-email@example.com serviceAccount:${SERVICE_ACCOUNT_EMAIL}; do
+     gcloud iap web add-iam-policy-binding --resource-type=cloud-run \
+       --service=$SERVICE_NAME --region=$REGION \
+       --member="$member" --role="roles/iap.httpsResourceAccessor" --condition=None
+   done
+   ```
+4. **Let Cloud Scheduler through IAP.** IAP accepts Cloud Scheduler's Google-signed token only if the token's audience is an OAuth client ID that IAP trusts.
+   1. In the Console, go to **Google Auth Platform > Clients** and create a **Web application** OAuth client. No redirect URIs are needed, and you don't need the client secret.
+   2. Trust that client in IAP and tell the service to use it as the scheduler audience:
+      ```bash
+      export SCHEDULER_CLIENT_ID="<client-id>.apps.googleusercontent.com"
+
+      cat > iap-settings.yaml <<EOF
+      accessSettings:
+        oauthSettings:
+          programmaticClients:
+          - ${SCHEDULER_CLIENT_ID}
+      EOF
+      gcloud iap settings set iap-settings.yaml --resource-type=cloud-run \
+        --service=$SERVICE_NAME --region=$REGION
+
+      gcloud run services update $SERVICE_NAME --region=$REGION \
+        --update-env-vars=SCHEDULER_OIDC_AUDIENCE=$SCHEDULER_CLIENT_ID
+      ```
+   3. Open the UI and click **Save**. Saving updates the scheduler job to send the new audience.
+
+> **Note:** If your organization restricts IAM members to your own domain (`iam.allowedPolicyMemberDomains`), the IAP service agent binding in step 2 may be rejected. Ask an org admin for a temporary project-level exception while you add it.
 
 ## Sync safety
 

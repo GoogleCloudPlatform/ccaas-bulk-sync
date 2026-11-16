@@ -38,6 +38,58 @@ const SECRET_NAMES = {
     clientSecret: 'entra-client-secret',
 };
 
+// Fields that hold secret values. They must only live in Secret Manager, never
+// in the Firestore config document or in API responses.
+const SECRET_VALUE_FIELDS = {
+    ccaas: { apiKey: 'apiKeySecretName' },
+    directory: { gcpKey: 'gcpKeySecretName', bindPassword: 'bindPasswordSecretName', clientSecret: 'clientSecretSecretName' },
+};
+const SECRET_NAME_FOR_FIELD = {
+    apiKey: SECRET_NAMES.ccaasApiKey,
+    gcpKey: SECRET_NAMES.gcpKey,
+    bindPassword: SECRET_NAMES.bindPassword,
+    clientSecret: SECRET_NAMES.clientSecret,
+};
+
+/**
+ * Returns a copy of the config with every secret value and secret reference
+ * removed, so it is safe to send to the browser.
+ */
+function redactConfig(config) {
+    const copy = JSON.parse(JSON.stringify(config || {}));
+    for (const [section, fields] of Object.entries(SECRET_VALUE_FIELDS)) {
+        if (!copy[section]) continue;
+        for (const [valueField, nameField] of Object.entries(fields)) {
+            delete copy[section][valueField];
+            delete copy[section][nameField];
+        }
+    }
+    return copy;
+}
+
+/**
+ * Moves any plaintext secret values found in a stored config (written by
+ * older versions) to Secret Manager and removes them from the document.
+ * Mutates `config`; returns the secrets that must be written.
+ */
+function extractLegacyPlaintextSecrets(config) {
+    const secrets = [];
+    for (const [section, fields] of Object.entries(SECRET_VALUE_FIELDS)) {
+        const sec = config[section];
+        if (!sec) continue;
+        for (const [valueField, nameField] of Object.entries(fields)) {
+            if (!(valueField in sec)) continue;
+            const value = sec[valueField];
+            delete sec[valueField];
+            if (typeof value === 'string' && value && !sec[nameField]) {
+                sec[nameField] = SECRET_NAME_FOR_FIELD[valueField];
+                secrets.push({ name: SECRET_NAME_FOR_FIELD[valueField], value });
+            }
+        }
+    }
+    return secrets;
+}
+
 const HOSTNAME_RE = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/i;
 const TENANT_ID_RE = /^[a-z0-9][a-z0-9.-]{0,252}$/i;
 const CLIENT_ID_RE = /^[a-z0-9-]{1,64}$/i;
@@ -155,7 +207,8 @@ function buildConfigToSave(current, incoming) {
         throw new ConfigValidationError('Request body must be a JSON object.');
     }
     const configToSave = JSON.parse(JSON.stringify(current || {}));
-    const secretsToSet = [];
+    // Never keep plaintext secrets in Firestore (older versions stored some).
+    const secretsToSet = extractLegacyPlaintextSecrets(configToSave);
 
     if (incoming.ccaas) {
         const stored = configToSave.ccaas || {};
@@ -243,4 +296,6 @@ module.exports = {
     validateTenantId,
     validateClientId,
     validateSafety,
+    redactConfig,
+    extractLegacyPlaintextSecrets,
 };

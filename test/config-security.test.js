@@ -135,3 +135,36 @@ test('buildConfigToSave stores validated safety settings', () => {
     assert.deepStrictEqual(configToSave.safety, { maxDeactivations: 7 });
     assert.throws(() => buildConfigToSave(STORED, { ...incomingFrom(STORED), safety: { maxDeactivations: '' } }), ConfigValidationError);
 });
+
+const { redactConfig, extractLegacyPlaintextSecrets } = require('../config-security');
+
+test('redactConfig removes secret values and references', () => {
+    const out = redactConfig({
+        ccaas: { host: 'h', apiKey: 'K', apiKeySecretName: 'ccaas-api-key' },
+        directory: { type: 'entra', gcpKey: '{...}', bindPassword: 'p', clientSecret: 's', clientSecretSecretName: 'x', tenantId: 't' },
+    });
+    assert.deepStrictEqual(out, { ccaas: { host: 'h' }, directory: { type: 'entra', tenantId: 't' } });
+});
+
+test('legacy plaintext secrets are removed from Firestore on save and migrated if not already in Secret Manager', () => {
+    const legacy = {
+        ccaas: { host: 'acme.ccaiplatform.com', apiKey: 'OLD-KEY', apiKeySecretName: 'ccaas-api-key' },
+        directory: { ...STORED.directory, gcpKey: '{"private_key":"x"}' },
+        mappings: [], schedule: { type: 'manual' }, syncRole: '',
+    };
+    delete legacy.directory.gcpKeySecretName;
+    const incoming = incomingFrom({ ...STORED, ccaas: { host: 'acme.ccaiplatform.com', apiKeySecretName: 'ccaas-api-key' } });
+    const { configToSave, secretsToSet } = buildConfigToSave(legacy, incoming);
+    assert.strictEqual(configToSave.ccaas.apiKey, undefined);
+    assert.strictEqual(configToSave.directory.gcpKey, undefined);
+    assert.strictEqual(configToSave.directory.gcpKeySecretName, 'gcp-sa-key');
+    // apiKey already had a Secret Manager reference, so it is only removed; gcpKey had none, so it is migrated.
+    assert.deepStrictEqual(secretsToSet, [{ name: 'gcp-sa-key', value: '{"private_key":"x"}' }]);
+    assert.ok(!JSON.stringify(configToSave).includes('OLD-KEY'));
+});
+
+test('extractLegacyPlaintextSecrets is a no-op on clean configs', () => {
+    const cfg = { ccaas: { host: 'h', apiKeySecretName: 'ccaas-api-key' }, directory: { type: 'ad' } };
+    assert.deepStrictEqual(extractLegacyPlaintextSecrets(cfg), []);
+    assert.deepStrictEqual(cfg, { ccaas: { host: 'h', apiKeySecretName: 'ccaas-api-key' }, directory: { type: 'ad' } });
+});
