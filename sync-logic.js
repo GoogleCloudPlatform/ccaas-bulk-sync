@@ -16,11 +16,10 @@
 
 const { google } = require('googleapis');
 const { Client, AndFilter, EqualityFilter } = require('ldapts');
-const fetch = require('node-fetch');
-const FormData = require('form-data');
 const msal = require('@azure/msal-node');
 const { Client: GraphClient } = require('@microsoft/microsoft-graph-client');
-require("isomorphic-fetch");
+// fetch, FormData and Blob are built into Node.js 22; the Microsoft Graph
+// client uses the global fetch as well.
 const { validateCcaasHost, validateLdapUrl } = require('./config-security');
 const { buildDirectoryUsers, computeSyncPlan, assertPlanIsSafe } = require('./sync-plan');
 
@@ -83,18 +82,13 @@ async function _callCcaasUploadApi(config, path, usersPayload) {
     const form = new FormData();
     console.log(`Uploading bulk user file with ${usersPayload.length} records.`);
     
-    const payloadBuffer = Buffer.from(JSON.stringify(usersPayload), 'utf8');
-    
-    form.append('file', payloadBuffer, {
-        filename: 'users.json',
-        contentType: 'application/json'
-    });
+    form.append('file', new Blob([JSON.stringify(usersPayload)], { type: 'application/json' }), 'users.json');
 
+    // fetch sets the multipart Content-Type (with boundary) from the FormData body.
     const options = {
         method: 'POST',
         body: form,
         headers: {
-            ...form.getHeaders(),
             'Authorization': authHeader
         }
     };
@@ -664,5 +658,6 @@ module.exports = {
     GroupNotFoundError,
     // Exposed for tests.
     _graphGetAll,
+    _callCcaasUploadApi,
 };
 

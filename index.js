@@ -241,7 +241,7 @@ app.post('/api/ccaas-details', async (req, res) => {
 
 app.post('/api/ccaas-test', async (req, res) => {
     try {
-        const config = await _getHydratedConfig({ ccaas: req.body });
+        const config = await _getHydratedConfig({ ccaas: req.body || {} });
         if (!config) return res.status(400).send('Configuration must be saved before testing.');
         await syncLogic.testCcaasConnection(config);
         res.status(200).json({ success: true });
@@ -296,9 +296,9 @@ app.get('/api/ccaas-jobs/scheme-errors/:jobId', async (req, res) => {
 
 app.post('/api/directory-test', async (req, res) => {
     try {
-        const config = await _getHydratedConfig({ directory: req.body });
+        const config = await _getHydratedConfig({ directory: req.body || {} });
          if (!config) return res.status(400).send('Configuration must be saved before testing.');
-        const type = req.body.type;
+        const type = req.body?.type;
         if (type === 'google') {
             await syncLogic.testGoogleWorkspaceConnection(config.directory);
         } else if (type === 'ad') {

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased (1.3.0)
+### Security
+- CI on every PR: unit tests, `npm audit` (fails on high or critical), Docker build and container startup smoke test; Dependabot; CodeQL; branch protection on `main`.
+- Fixed CodeQL findings: user-controlled values in log format strings, a slow regex in Bearer header parsing, and missing rate limiting (now 120 requests/min per IP on `/api`, 600/min on static files). Job IDs are validated.
+- `npm audit`: **0 vulnerabilities** in production dependencies.
+
+### Changed
+- Major dependency upgrades: `@google-cloud/firestore` 9, `@google-cloud/secret-manager` 8, `@google-cloud/scheduler` 6, `googleapis` 190, `google-auth-library` 11, `ldapts` 9, `@azure/msal-node` 7, `express` 5, `express-rate-limit` 8. All require Node.js 22, which the container already uses.
+- Removed `node-fetch`, `isomorphic-fetch` and `form-data`; the code uses Node.js 22's built-in `fetch`, `FormData` and `Blob`.
+
 ## 1.2.0: IAP directly on Cloud Run, secret redaction
 ### Security
 - **`GET /api/config` no longer returns secret values.** Earlier versions stored some credentials (CCaaS API key, service account JSON key) in plaintext in the Firestore config, and `GET /api/config` returned them; it removed only the Secret Manager references. All secret values and references are now removed from responses.
