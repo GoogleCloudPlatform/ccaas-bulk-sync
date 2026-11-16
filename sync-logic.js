@@ -22,6 +22,7 @@ const { Client: GraphClient } = require('@microsoft/microsoft-graph-client');
 // client uses the global fetch as well.
 const { validateCcaasHost, validateLdapUrl } = require('./config-security');
 const { buildDirectoryUsers, computeSyncPlan, assertPlanIsSafe } = require('./sync-plan');
+const { getDirectoryClient } = require('./workspace-auth');
 
 const CCAAS_PAGE_SIZE = 1000;
 const MAX_PAGES = 1000;
@@ -222,27 +223,15 @@ async function testEntraIdConnection(directoryConfig) {
 
 
 async function testGoogleWorkspaceConnection(directoryConfig) {
-    if (!directoryConfig.gcpKey || !directoryConfig.adminEmail) {
-        throw new Error('Service Account JSON Key and Admin Email are required.');
-    }
     try {
-        const auth = google.auth.fromJSON(JSON.parse(directoryConfig.gcpKey));
-        auth.scopes = [
-            'https://www.googleapis.com/auth/admin.directory.user.readonly',
-            'https://www.googleapis.com/auth/admin.directory.group.readonly',
-            'https://www.googleapis.com/auth/admin.directory.group.member.readonly'
-        ];
-        auth.subject = directoryConfig.adminEmail;
-
-        const admin = google.admin({ version: 'directory_v1', auth: auth });
-        
+        const admin = await getDirectoryClient(directoryConfig);
         await admin.users.list({
             customer: 'my_customer',
             maxResults: 1,
             orderBy: 'email'
         });
     } catch (e) {
-        console.error('Google Workspace Auth Error:', e);
+        console.error('Google Workspace Auth Error:', e.message);
         throw new Error(`Google Workspace connection failed: ${e.message}`);
     }
 }
@@ -263,15 +252,8 @@ async function testActiveDirectoryConnection(directoryConfig) {
 }
 
 async function getGoogleWorkspaceGroups(directoryConfig) {
-    if (!directoryConfig.gcpKey || !directoryConfig.adminEmail) {
-        throw new Error('Service Account JSON Key and Admin Email are required for fetching groups.');
-    }
     try {
-        const auth = google.auth.fromJSON(JSON.parse(directoryConfig.gcpKey));
-        auth.scopes = ['https://www.googleapis.com/auth/admin.directory.group.readonly'];
-        auth.subject = directoryConfig.adminEmail;
-        const admin = google.admin({ version: 'directory_v1', auth: auth });
-        
+        const admin = await getDirectoryClient(directoryConfig);
         let allGroups = [];
         let pageToken = null;
         do {
@@ -285,11 +267,11 @@ async function getGoogleWorkspaceGroups(directoryConfig) {
             }
             pageToken = res.data.nextPageToken;
         } while (pageToken);
-        
+
         return allGroups.map(group => group.name).sort();
 
     } catch (e) {
-        console.error('Google Workspace Get Groups Error:', e);
+        console.error('Google Workspace Get Groups Error:', e.message);
         throw new Error(`Failed to get Google Workspace groups: ${e.message}`);
     }
 }
@@ -337,17 +319,6 @@ async function getDirectoryGroups(config) {
 
 // --- Main Sync Logic ---
 
-function _googleAdmin(directoryConfig) {
-    const auth = google.auth.fromJSON(JSON.parse(directoryConfig.gcpKey));
-    auth.scopes = [
-        'https://www.googleapis.com/auth/admin.directory.group.member.readonly',
-        'https://www.googleapis.com/auth/admin.directory.group.readonly',
-        'https://www.googleapis.com/auth/admin.directory.user.readonly'
-    ];
-    auth.subject = directoryConfig.adminEmail;
-    return google.admin({ version: 'directory_v1', auth: auth });
-}
-
 async function _mapWithConcurrency(items, limit, fn) {
     const results = new Array(items.length);
     let next = 0;
@@ -362,7 +333,7 @@ async function _mapWithConcurrency(items, limit, fn) {
 }
 
 async function getGoogleWorkspaceGroupMembers(groupName, directoryConfig, cache = {}) {
-    const admin = _googleAdmin(directoryConfig);
+    const admin = await getDirectoryClient(directoryConfig);
 
     // Match the group by exact name from the full group list. This avoids
     // building an Admin SDK query string from user-supplied text.

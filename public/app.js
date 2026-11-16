@@ -53,7 +53,7 @@ createApp({
         const testResultModal = ref({ show: false, title: '', message: '', status: 'success' });
         const showGcpHelpModal = ref(false);
         const showSyncModal = ref(false);
-        const me = ref({ email: null, role: 'viewer', adminListConfigured: true });
+        const me = ref({ email: null, role: 'viewer', adminListConfigured: true, serviceAccount: null });
         const isAdmin = computed(() => me.value.role === 'admin');
         const fetchMe = async () => {
             try {

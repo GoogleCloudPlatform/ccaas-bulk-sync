@@ -95,12 +95,20 @@ async function _getHydratedConfig(bodyWithSecrets = null) {
         ? bodyWithSecrets.ccaas.apiKey 
         : await _getSecret(config.ccaas.apiKeySecretName);
     
+    // Google Workspace: keyless delegation unless a stored JSON key is selected.
+    const googleAuthMode = bodyWithSecrets?.directory?.googleAuthMode
+        || config.directory.googleAuthMode
+        || (config.directory.gcpKeySecretName ? 'key' : 'keyless');
+    config.directory.googleAuthMode = googleAuthMode;
+
     if(bodyWithSecrets?.directory) {
-        config.directory.gcpKey = bodyWithSecrets.directory.gcpKey || await _getSecret(config.directory.gcpKeySecretName);
+        config.directory.gcpKey = googleAuthMode === 'key'
+            ? (bodyWithSecrets.directory.gcpKey || await _getSecret(config.directory.gcpKeySecretName))
+            : null;
         config.directory.bindPassword = bodyWithSecrets.directory.bindPassword || await _getSecret(config.directory.bindPasswordSecretName);
         config.directory.clientSecret = bodyWithSecrets.directory.clientSecret || await _getSecret(config.directory.clientSecretSecretName);
     } else {
-        config.directory.gcpKey = await _getSecret(config.directory.gcpKeySecretName);
+        config.directory.gcpKey = googleAuthMode === 'key' ? await _getSecret(config.directory.gcpKeySecretName) : null;
         config.directory.bindPassword = await _getSecret(config.directory.bindPasswordSecretName);
         config.directory.clientSecret = await _getSecret(config.directory.clientSecretSecretName);
     }
@@ -119,6 +127,7 @@ app.get('/api/me', (req, res) => {
         email: req.user?.email || null,
         role: roleFor(req.user),
         adminListConfigured: isAdminListConfigured(),
+        serviceAccount: process.env.SERVICE_ACCOUNT || null,
     });
 });
 
@@ -149,6 +158,10 @@ app.get('/api/config', async (req, res) => {
             safety: { ...defaultConfig.safety, ...storedConfig.safety },
         };
         
+        // Effective Google auth mode (older configs have a key but no mode).
+        configToReturn.directory.googleAuthMode = configToReturn.directory.googleAuthMode
+            || (configToReturn.directory.gcpKeySecretName ? 'key' : 'keyless');
+
         // Never send secret values (or references) to the browser.
         res.status(200).json(redactConfig(configToReturn));
     } catch (error) {

@@ -168,3 +168,14 @@ test('extractLegacyPlaintextSecrets is a no-op on clean configs', () => {
     assert.deepStrictEqual(extractLegacyPlaintextSecrets(cfg), []);
     assert.deepStrictEqual(cfg, { ccaas: { host: 'h', apiKeySecretName: 'ccaas-api-key' }, directory: { type: 'ad' } });
 });
+
+test('googleAuthMode: existing key-based configs stay on the key; new configs default to keyless', () => {
+    const keyCfg = { ...STORED, directory: { ...STORED.directory, type: 'google', gcpKeySecretName: 'gcp-sa-key' } };
+    const inc = incomingFrom(keyCfg); delete inc.directory.googleAuthMode;
+    assert.strictEqual(buildConfigToSave(keyCfg, inc).configToSave.directory.googleAuthMode, 'key');
+    const fresh = { ...STORED, directory: { ...STORED.directory, type: 'google' } };
+    delete fresh.directory.gcpKeySecretName;
+    assert.strictEqual(buildConfigToSave(fresh, incomingFrom(fresh)).configToSave.directory.googleAuthMode, 'keyless');
+    assert.strictEqual(buildConfigToSave(keyCfg, { ...inc, directory: { ...inc.directory, googleAuthMode: 'keyless' } }).configToSave.directory.googleAuthMode, 'keyless');
+    assert.throws(() => buildConfigToSave(keyCfg, { ...inc, directory: { ...inc.directory, googleAuthMode: 'oauth' } }), ConfigValidationError);
+});

@@ -175,6 +175,15 @@ function _normalizeStoredLdapUrl(value) {
     }
 }
 
+/** 'keyless' (default; no stored key) or 'key' (legacy service account JSON key). */
+function validateGoogleAuthMode(value) {
+    const mode = _optionalString(value, 'Google authentication mode');
+    if (mode !== 'keyless' && mode !== 'key') {
+        throw new ConfigValidationError('Google authentication mode must be "keyless" or "key".');
+    }
+    return mode;
+}
+
 /** Validates the sync safety settings. */
 function validateSafety(safety) {
     if (!safety || typeof safety !== 'object' || Array.isArray(safety)) {
@@ -262,6 +271,10 @@ function buildConfigToSave(current, incoming) {
             tenantId,
             clientId,
             entraIdEmailField: _optionalString(dir.entraIdEmailField, 'Entra ID email field'),
+            // Keep existing key-based deployments on their key unless the admin switches.
+            googleAuthMode: dir.googleAuthMode !== undefined && dir.googleAuthMode !== null && dir.googleAuthMode !== ''
+                ? validateGoogleAuthMode(dir.googleAuthMode)
+                : (stored.googleAuthMode || (stored.gcpKeySecretName ? 'key' : 'keyless')),
         };
 
         if (gcpKey) {
@@ -296,6 +309,7 @@ module.exports = {
     validateTenantId,
     validateClientId,
     validateSafety,
+    validateGoogleAuthMode,
     redactConfig,
     extractLegacyPlaintextSecrets,
 };
