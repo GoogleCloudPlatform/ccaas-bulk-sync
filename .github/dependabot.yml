@@ -18,6 +18,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Wait before proposing newly published versions (supply-chain safety).
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 10
     groups:
       minor-and-patch:
@@ -26,7 +29,13 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Wait before proposing newly published versions (supply-chain safety).
+    cooldown:
+      default-days: 7
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
+    # Wait before proposing newly published versions (supply-chain safety).
+    cooldown:
+      default-days: 7
