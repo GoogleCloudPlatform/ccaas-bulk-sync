@@ -1,0 +1,88 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Unit tests and dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-fund
+      - run: npm test
+      - name: Audit production dependencies (fail on high or critical)
+        run: npm audit --omit=dev --audit-level=high
+
+  container:
+    name: Container build and startup smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build image
+        run: docker build -t ccaas-bulk-sync:ci .
+      - name: Start container (production mode, authentication on)
+        run: |
+          docker run -d --name app -p 8080:8080 \
+            -e K_SERVICE=ci \
+            -e IAP_AUDIENCE=/projects/0/global/backendServices/0 \
+            -e SERVICE_ACCOUNT=ci@example.iam.gserviceaccount.com \
+            ccaas-bulk-sync:ci
+          for i in $(seq 1 30); do
+            curl -sf -o /dev/null http://localhost:8080/ && exit 0
+            sleep 1
+          done
+          echo "Container did not start:"; docker logs app; exit 1
+      - name: Smoke test
+        run: |
+          set -e
+          check() { # method path expected
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X "$1" "http://localhost:8080$2")
+            echo "$1 $2 -> $code (expected $3)"
+            [ "$code" = "$3" ]
+          }
+          check GET  /                 200
+          check GET  /output.css       200
+          check GET  /api/config       401
+          check POST /api/config       401
+          check POST /api/sync         401
+          # A forged IAP header must be rejected.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'x-goog-iap-jwt-assertion: a.b.c' http://localhost:8080/api/config)
+          echo "forged IAP JWT -> $code (expected 401)"; [ "$code" = "401" ]
+      - name: Container logs
+        if: always()
+        run: docker logs app || true
