@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased (1.3.0)
+## 1.3.0: Hardening and CI
+
+### Upgrade notes
+1. Redeploy (README step 5).
+2. **Set `ADMIN_EMAILS`** (README step 8). Until it's set, every IAP user stays an admin, and the UI shows a warning.
+3. **Tighten the service account's permissions** (README "Upgrading > To 1.3.0"): grant the per-secret roles and the custom scheduler role, then remove the old project-wide roles.
+4. Open the UI and click **Save** once.
+
 ### Security
 - CI on every PR: unit tests, `npm audit` (fails on high or critical), Docker build and container startup smoke test; Dependabot; CodeQL; branch protection on `main`.
 - Fixed CodeQL findings: user-controlled values in log format strings, a slow regex in Bearer header parsing, and missing rate limiting (now 120 requests/min per IP on `/api`, 600/min on static files). Job IDs are validated.
@@ -8,10 +15,8 @@
 
 ### Added
 - **Admin allowlist (`ADMIN_EMAILS`):** only admins can save the configuration, run live syncs, proceed CCaaS jobs and run connection tests. Other IAP users are read-only viewers who can still run simulations. New `GET /api/me`; the UI shows your role and disables admin-only actions. When `ADMIN_EMAILS` is unset, everyone stays an admin and a warning is shown. **Set it after upgrading.**
-
 - **Least-privilege IAM (README step 4.2):** per-secret `secretAccessor` + `secretVersionManager` instead of project-wide Secret Manager roles; a custom role for Scheduler jobs only, instead of `roles/cloudscheduler.admin`; `serviceAccountUser` on the service account itself only. The service no longer creates secrets.
 - **Old secret versions are disabled** when a credential is saved, so replaced credentials can't be read.
-
 - **UI hardening:** Vue is served from the app instead of unpkg; the inline script and styles moved to `/app.js` and `/app.css`; Google Fonts import removed. `helmet` sets security headers and a strict Content Security Policy (same-origin only; `'unsafe-eval'` only for Vue's template compiler; `frame-ancestors 'none'`).
 - **Container hardening:** runs as the unprivileged `node` user; `npm ci` with a pruned production `node_modules`; `NODE_ENV=production`. CI checks that the container doesn't run as root, and checks the security headers.
 
