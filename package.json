@@ -19,7 +19,7 @@
     "google-auth-library": "^9.10.0",
     "googleapis": "^137.1.0",
     "isomorphic-fetch": "^3.0.0",
-    "ldapts": "^4.1.0",
+    "ldapts": "^9.2.0",
     "node-fetch": "^2.7.0"
   },
   "devDependencies": {
