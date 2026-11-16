@@ -15,6 +15,7 @@
  */
 
 const express = require('express');
+const { rateLimit } = require('express-rate-limit');
 const { Firestore } = require('@google-cloud/firestore');
 const { CloudSchedulerClient } = require('@google-cloud/scheduler');
 const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
@@ -28,6 +29,17 @@ const { SyncSafetyError, DEFAULT_MAX_DEACTIVATIONS } = require('./sync-plan');
 const app = express();
 app.disable('x-powered-by');
 app.use(express.json());
+
+// Cloud Run (and the load balancer) put the client IP in X-Forwarded-For.
+// Trusting one hop lets the rate limiter key on the real client IP.
+app.set('trust proxy', 1);
+
+// Basic abuse protection in front of authentication, JWT verification and
+// Secret Manager access. IAP limits who can reach the service; this limits
+// how fast any one client can call it.
+const apiLimiter = rateLimit({ windowMs: 60 * 1000, limit: 120, standardHeaders: 'draft-7', legacyHeaders: false });
+const staticLimiter = rateLimit({ windowMs: 60 * 1000, limit: 600, standardHeaders: 'draft-7', legacyHeaders: false });
+app.use('/api', apiLimiter);
 
 // Every API route requires an authenticated caller (IAP user, or Cloud
 // Scheduler for POST /api/sync). See auth.js.
@@ -107,6 +119,10 @@ async function _getHydratedConfig(bodyWithSecrets = null) {
 }
 
 // --- API Endpoints ---
+
+function isValidJobId(jobId) {
+    return (typeof jobId === 'string' || typeof jobId === 'number') && /^[A-Za-z0-9_-]{1,64}$/.test(String(jobId));
+}
 
 app.get('/api/config', async (req, res) => {
     try {
@@ -247,16 +263,16 @@ app.post('/api/ccaas-jobs', async (req, res) => {
 
 app.post('/api/ccaas-jobs/proceed', async (req, res) => {
     try {
-        const { jobId } = req.body;
-        if (!jobId) {
-            return res.status(400).send('Job ID is required.');
+        const { jobId } = req.body || {};
+        if (!isValidJobId(jobId)) {
+            return res.status(400).send('A valid Job ID is required.');
         }
         const config = await _getHydratedConfig();
         if (!config) return res.status(400).send('Configuration must be saved first.');
         await syncLogic.proceedCcaasJob(config, jobId);
         res.status(200).json({ success: true, message: `Job ${jobId} is now processing.` });
     } catch (error) {
-        console.error(`Error proceeding job ${req.body.jobId}:`, error);
+        console.error('Error proceeding job %s:', String(req.body?.jobId), error);
         res.status(500).send(`Error proceeding job: ${error.message}`);
     }
 });
@@ -264,15 +280,15 @@ app.post('/api/ccaas-jobs/proceed', async (req, res) => {
 app.get('/api/ccaas-jobs/scheme-errors/:jobId', async (req, res) => {
     try {
         const { jobId } = req.params;
-        if (!jobId) {
-            return res.status(400).send('Job ID is required.');
+        if (!isValidJobId(jobId)) {
+            return res.status(400).send('A valid Job ID is required.');
         }
         const config = await _getHydratedConfig();
         if (!config) return res.status(400).send('Configuration must be saved first.');
         const errors = await syncLogic.getCcaasSchemeErrors(config, jobId);
         res.status(200).json(errors);
     } catch (error) {
-        console.error(`Error fetching scheme errors for job ${req.params.jobId}:`, error);
+        console.error('Error fetching scheme errors for job %s:', String(req.params.jobId), error);
         res.status(500).send(`Error fetching scheme errors: ${error.message}`);
     }
 });
@@ -414,9 +430,9 @@ async function setupScheduler(scheduleConfig = { type: 'manual' }) {
 
 // --- Static File Server ---
 const publicPath = path.join(__dirname, 'public');
-app.use(express.static(publicPath));
+app.use(staticLimiter, express.static(publicPath));
 
-app.get(/^(?!\/api).*/, (req, res) => {
+app.get(/^(?!\/api).*/, staticLimiter, (req, res) => {
     res.sendFile(path.join(publicPath, 'index.html'));
 });
 

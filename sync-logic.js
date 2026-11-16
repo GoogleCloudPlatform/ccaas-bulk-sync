@@ -129,9 +129,9 @@ async function getCcaasSchemeErrors(config, jobId) {
 }
 
 async function proceedCcaasJob(config, jobId) {
-    console.log(`Requesting processing for Job ID: ${jobId}`);
+    console.log('Requesting processing for Job ID: %s', String(jobId));
     const response = await _callCcaasApi(config, '/apps/api/v1/bulk/users/proceed', 'POST', { id: jobId });
-    console.log(`Successfully requested processing for Job ID: ${jobId}. Response:`, response);
+    console.log('Successfully requested processing for Job ID: %s. Response: %j', String(jobId), response);
     return response;
 }
 
