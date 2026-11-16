@@ -9,6 +9,9 @@
 ### Added
 - **Admin allowlist (`ADMIN_EMAILS`):** only admins can save the configuration, run live syncs, proceed CCaaS jobs and run connection tests. Other IAP users are read-only viewers who can still run simulations. New `GET /api/me`; the UI shows your role and disables admin-only actions. When `ADMIN_EMAILS` is unset, everyone stays an admin and a warning is shown. **Set it after upgrading.**
 
+- **Least-privilege IAM (README step 4.2):** per-secret `secretAccessor` + `secretVersionManager` instead of project-wide Secret Manager roles; a custom role for Scheduler jobs only, instead of `roles/cloudscheduler.admin`; `serviceAccountUser` on the service account itself only. The service no longer creates secrets.
+- **Old secret versions are disabled** when a credential is saved, so replaced credentials can't be read.
+
 ### Changed
 - Major dependency upgrades: `@google-cloud/firestore` 9, `@google-cloud/secret-manager` 8, `@google-cloud/scheduler` 6, `googleapis` 190, `google-auth-library` 11, `ldapts` 9, `@azure/msal-node` 7, `express` 5, `express-rate-limit` 8. All require Node.js 22, which the container already uses.
 - Removed `node-fetch`, `isomorphic-fetch` and `form-data`; the code uses Node.js 22's built-in `fetch`, `FormData` and `Blob`.

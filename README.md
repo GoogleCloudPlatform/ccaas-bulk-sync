@@ -82,26 +82,34 @@ export SERVICE_ACCOUNT_EMAIL="${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gservice
 gcloud iam service-accounts create $SERVICE_ACCOUNT_NAME \
   --display-name="CCaaS Sync Service Account"
 
-# Manage the Cloud Scheduler job
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
-  --role="roles/cloudscheduler.admin"
-
 # Read and write the configuration in Firestore
 gcloud projects add-iam-policy-binding $PROJECT_ID \
   --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
   --role="roles/datastore.user"
 
-# Read and update secrets
+# Read and rotate ONLY the four application secrets (not every secret in the project)
+for s in ccaas-api-key gcp-sa-key ad-bind-password entra-client-secret; do
+  for role in roles/secretmanager.secretAccessor roles/secretmanager.secretVersionManager; do
+    gcloud secrets add-iam-policy-binding $s \
+      --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" --role="$role"
+  done
+done
+
+# Manage only Cloud Scheduler jobs (custom role instead of roles/cloudscheduler.admin)
+gcloud iam roles create ccaasSyncScheduler --project=$PROJECT_ID \
+  --title="CCaaS Sync Scheduler" \
+  --permissions=cloudscheduler.jobs.get,cloudscheduler.jobs.create,cloudscheduler.jobs.update,cloudscheduler.jobs.delete
 gcloud projects add-iam-policy-binding $PROJECT_ID \
   --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
-  --role="roles/secretmanager.admin"
+  --role="projects/${PROJECT_ID}/roles/ccaasSyncScheduler"
 
-# Let the service account act as itself for scheduler jobs
+# Let the service account attach itself to the scheduler job (on itself only)
 gcloud iam service-accounts add-iam-policy-binding $SERVICE_ACCOUNT_EMAIL \
   --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
   --role="roles/iam.serviceAccountUser"
 ```
+
+> **Note:** The service doesn't create secrets; create them in step 4.1. When a credential is saved, the service adds a new secret version and **disables the previous versions**, so replaced credentials can no longer be read.
 
 #### 4.3 Cloud Build permissions
 
@@ -317,6 +325,18 @@ Other behavior to be aware of:
 - Logs contain only counts and job IDs, never user details.
 
 ## Upgrading
+
+### To 1.3.0 (hardening)
+
+1. Redeploy, then **set `ADMIN_EMAILS`** (step 8).
+2. **Tighten the service account's permissions.** Grant the roles from step 4.2, then remove the broad project-wide ones that earlier versions of this README asked for:
+   ```bash
+   for role in roles/secretmanager.admin roles/secretmanager.secretAccessor roles/secretmanager.secretVersionManager roles/cloudscheduler.admin roles/iam.serviceAccountUser; do
+     gcloud projects remove-iam-policy-binding $PROJECT_ID \
+       --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" --role="$role" 2>/dev/null || true
+   done
+   ```
+3. Open the UI and click **Save** to confirm the scheduler job can still be updated.
 
 ### To 1.1.0 (sync safety)
 
