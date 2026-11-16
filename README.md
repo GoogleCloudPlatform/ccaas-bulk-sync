@@ -305,6 +305,25 @@ Instead of steps 6 and 7, you can turn on IAP directly on the Cloud Run service.
 
 > **Note:** If your organization restricts IAM members to your own domain (`iam.allowedPolicyMemberDomains`), the IAP service agent binding in step 2 may be rejected. Ask an org admin for a temporary project-level exception while you add it.
 
+## Google Workspace without a stored key
+
+To sync from Google Workspace, the service reads users and groups through the Admin SDK using **domain-wide delegation**. By default this is **keyless**: the service's own service account signs the delegation token through the IAM Credentials API, so no service account key is created or stored.
+
+1. **Allow the service account to sign as itself:**
+   ```bash
+   gcloud iam service-accounts add-iam-policy-binding $SERVICE_ACCOUNT_EMAIL \
+     --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
+     --role="roles/iam.serviceAccountTokenCreator"
+   gcloud services enable iamcredentials.googleapis.com
+   ```
+2. **Authorize domain-wide delegation** in the Google Workspace Admin Console (**Security > Access and data control > API controls > Manage Domain Wide Delegation > Add new**):
+   - **Client ID:** `gcloud iam service-accounts describe $SERVICE_ACCOUNT_EMAIL --format='value(oauth2ClientId)'`
+   - **OAuth scopes:**
+     `https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.googleapis.com/auth/admin.directory.group.readonly,https://www.googleapis.com/auth/admin.directory.group.member.readonly`
+3. In the UI, choose **Google Workspace**, select **Keyless domain-wide delegation**, enter a Workspace **Admin Email** the service will act as, and click **Test Connection**.
+
+Deployments that already use a service account JSON key keep using it until an admin switches to keyless. After switching, delete the old key: `gcloud iam service-accounts keys delete KEY_ID --iam-account=...`.
+
 ## Sync safety
 
 Each sync works out which users to add, update and deactivate, then submits one CCaaS bulk job. To prevent accidental mass deactivation:

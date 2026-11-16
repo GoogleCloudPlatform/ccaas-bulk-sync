@@ -188,6 +188,18 @@
             <div class="space-y-4">
                 <div v-if="config.directory.type === 'google'" class="space-y-4">
                     <div>
+                        <label class="block text-sm font-medium text-gray-600 mb-1">Authentication</label>
+                        <div class="flex flex-col gap-1 text-sm">
+                            <label class="flex items-center gap-2"><input type="radio" value="keyless" v-model="config.directory.googleAuthMode"> Keyless domain-wide delegation (recommended, no stored key)</label>
+                            <label class="flex items-center gap-2"><input type="radio" value="key" v-model="config.directory.googleAuthMode"> Service account JSON key (legacy)</label>
+                        </div>
+                    </div>
+                    <div v-if="config.directory.googleAuthMode !== 'key'" class="text-xs bg-blue-50 border border-blue-200 text-blue-900 rounded p-3 space-y-1">
+                        <p>In the Google Workspace Admin Console, go to <strong>Security &gt; Access and data control &gt; API controls &gt; Manage Domain Wide Delegation</strong>. Add the client ID of this service's service account<span v-if="me.serviceAccount"> (<span class="font-mono">{{ me.serviceAccount }}</span>)</span> with these scopes:</p>
+                        <p class="font-mono break-all">https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.googleapis.com/auth/admin.directory.group.readonly,https://www.googleapis.com/auth/admin.directory.group.member.readonly</p>
+                        <p>To find the client ID, run: <span class="font-mono">gcloud iam service-accounts describe SERVICE_ACCOUNT --format='value(oauth2ClientId)'</span></p>
+                    </div>
+                    <div v-if="config.directory.googleAuthMode === 'key'">
                         <label class="flex items-center gap-2 text-sm font-medium text-gray-600 mb-1">
                             <span>Google Cloud Service Account JSON Key</span>
                             <span @click="showGcpHelpModal = true" class="cursor-pointer text-blue-500 font-bold rounded-full w-5 h-5 flex items-center justify-center bg-blue-100 hover:bg-blue-200">?</span>

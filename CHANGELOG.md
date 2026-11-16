@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (1.4.0)
+### Added
+- **Keyless Google Workspace sync:** domain-wide delegation without a stored service account key. The service account signs the delegation JWT with the IAM Credentials `signJwt` API (needs `roles/iam.serviceAccountTokenCreator` on itself), and tokens are cached until close to expiry. Selectable in the UI. Existing key-based configs keep using their key until switched. See README "Google Workspace without a stored key".
+
 ## 1.3.0: Hardening and CI
 
 ### Upgrade notes
