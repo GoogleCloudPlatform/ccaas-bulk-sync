@@ -83,7 +83,7 @@ async function getKeylessAccessToken({ serviceAccount, subject, scopes = SCOPES 
             exp: iat + TOKEN_LIFETIME_S,
         });
     } catch (error) {
-        throw new Error(`Could not sign the delegation token as ${serviceAccount}. Grant it roles/iam.serviceAccountTokenCreator on itself (README). Details: ${error.message}`);
+        throw new Error(`Could not sign the delegation token. Grant the service account roles/iam.serviceAccountTokenCreator on itself (README). Details: ${error.message}`);
     }
 
     const response = await doFetch(TOKEN_URL, {
