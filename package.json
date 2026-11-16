@@ -9,7 +9,7 @@
     "build:css": "tailwindcss -i ./public/input.css -o ./public/output.css"
   },
   "dependencies": {
-    "@azure/msal-node": "^2.6.0",
+    "@azure/msal-node": "^7.2.1",
     "@google-cloud/firestore": "^7.7.0",
     "@google-cloud/scheduler": "^5.2.0",
     "@google-cloud/secret-manager": "^5.5.0",
