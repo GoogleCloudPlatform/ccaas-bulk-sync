@@ -50,7 +50,7 @@ if ! "${G[@]}" logging metrics describe "$SUCCESS_METRIC" >/dev/null 2>&1; then
 fi
 
 create_policy() { # display-name, json
-  if [ -n "$("${G[@]}" monitoring policies list --filter="displayName=\"$1\"" --format='value(name)')" ]; then
+  if [ -n "$("${G[@]}" monitoring policies list --filter="displayName=\"$1\"" --format='value(name)' 2>/dev/null)" ]; then
     echo "Alert policy \"$1\" already exists; skipping."
     return
   fi
