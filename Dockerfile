@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # Stage 1: Build the application
-FROM node:22-slim AS builder
+FROM node:25-slim AS builder
 
 WORKDIR /usr/src/app
 
@@ -28,7 +28,7 @@ COPY . .
 RUN npm run build:css
 
 # Stage 2: Create the final production image
-FROM node:22-slim
+FROM node:25-slim
 
 WORKDIR /usr/src/app
 
