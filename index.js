@@ -460,6 +460,13 @@ async function setupScheduler(scheduleConfig = { type: 'manual' }) {
 }
 
 
+// --- Health check (no auth; no configuration or secrets touched) ---
+const APP_VERSION = require('./package.json').version;
+app.get('/healthz', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.status(200).json({ status: 'ok', version: APP_VERSION });
+});
+
 // --- Static File Server ---
 const publicPath = path.join(__dirname, 'public');
 // Serve Vue from the installed package instead of a third-party CDN.

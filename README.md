@@ -6,6 +6,7 @@ It runs on Cloud Run, stores its configuration in Firestore and its credentials 
 
 - [Local development](#local-development)
 - [Deployment](#deployment) (load balancer + IAP, or [IAP directly on Cloud Run](#option-b-iap-directly-on-cloud-run-no-load-balancer))
+- [Monitoring and alerts](#monitoring-and-alerts)
 - [Sync safety](#sync-safety)
 - [Upgrading](#upgrading)
 - [Appendix: Microsoft Entra ID setup](#appendix-microsoft-entra-id-setup)
@@ -323,6 +324,22 @@ To sync from Google Workspace, the service reads users and groups through the Ad
 3. In the UI, choose **Google Workspace**, select **Keyless domain-wide delegation**, enter a Workspace **Admin Email** the service will act as, and click **Test Connection**.
 
 Deployments that already use a service account JSON key keep using it until an admin switches to keyless. After switching, delete the old key: `gcloud iam service-accounts keys delete KEY_ID --iam-account=...`.
+
+## Monitoring and alerts
+
+- **Health check:** `GET /healthz` returns `{"status":"ok","version":"…"}` with no authentication, and touches no configuration or secrets. Use it for uptime checks or load balancer health checks.
+- **Run history:** the UI shows **Recent Sync Runs**, and runs are stored in the Firestore collection `ccaas-sync-runs` (newest 200).
+- **Structured logs:** each sync writes one log entry with `jsonPayload.event="sync_run"`, plus `outcome`, `trigger`, `simulate`, `counts` and `jobId`:
+  ```bash
+  gcloud logging read 'jsonPayload.event="sync_run"' --limit=10 \
+    --format='table(timestamp,severity,jsonPayload.outcome,jsonPayload.trigger,jsonPayload.counts)'
+  ```
+- **Alerts:** `scripts/setup-alerts.sh` creates an email notification channel and two Cloud Monitoring alert policies:
+  1. **Sync failed or blocked:** any live sync with outcome `error`, `blocked`, `group_not_found`, `job_failed` or `job_timeout`.
+  2. **No successful scheduled sync:** no successful scheduled run for `NO_SUCCESS_HOURS` hours (default 3).
+  ```bash
+  PROJECT_ID=$PROJECT_ID SERVICE_NAME=$SERVICE_NAME NOTIFY_EMAIL=ops@example.com ./scripts/setup-alerts.sh
+  ```
 
 ## Sync safety
 
