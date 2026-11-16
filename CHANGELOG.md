@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.2: CCaaS pagination fix
+### Fixed
+- **CCaaS users are now read across every page.** The CCaaS users API returns at most 100 records per page, even when `per=1000` is requested. Versions 1.1.0 and 1.1.1 stopped at the first page shorter than 1000, so they still read only the first 100 users. Pagination now continues until an empty page, and the sync aborts if the API returns the same page twice.
+- Tenants with more than 100 CCaaS users should run **Simulate Only** after upgrading. Users beyond the first 100 may now be found, which can produce one-off updates or deactivations. The deactivation safety limit still applies.
+
 ## 1.1.1: Container startup fix
 ### Fixed
 - **The container failed to start in v1.0.1 and v1.1.0** (`Cannot find module './config-security'`). The Dockerfile copied only `index.js` and `sync-logic.js` into the production image, leaving out the modules added in those releases (`auth.js`, `config-security.js`, `sync-plan.js`, `sync-lock.js`). It now copies every top-level `.js` module.
