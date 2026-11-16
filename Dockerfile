@@ -17,29 +17,34 @@ FROM node:22-slim AS builder
 
 WORKDIR /usr/src/app
 
-# Copy package files and install all dependencies (including dev)
+# Install exactly what package-lock.json specifies (including dev dependencies
+# for the CSS build).
 COPY package*.json ./
-RUN npm install
+RUN npm ci --no-fund --no-audit
 
 # Copy the rest of the application source code
 COPY . .
 
-# Build the production CSS file
-RUN npm run build:css
+# Build the production CSS file, then drop dev dependencies.
+RUN npm run build:css && npm prune --omit=dev --no-fund --no-audit
 
 # Stage 2: Create the final production image
 FROM node:22-slim
 
+ENV NODE_ENV=production
 WORKDIR /usr/src/app
 
-# Copy only the necessary files from the builder stage
+# Copy only the necessary files from the builder stage, owned by root and
+# read-only for the runtime user.
 COPY --from=builder /usr/src/app/package*.json ./
 COPY --from=builder /usr/src/app/node_modules ./node_modules
 COPY --from=builder /usr/src/app/public ./public
 # Copy every top-level application module (index.js, auth.js, sync-*.js, ...).
 COPY --from=builder /usr/src/app/*.js ./
 
+# Run as the unprivileged "node" user that the official image provides.
+USER node
+
 EXPOSE 8080
 
 CMD [ "node", "index.js" ]
-
