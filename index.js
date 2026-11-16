@@ -22,6 +22,7 @@ const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
 const path = require('path');
 const syncLogic = require('./sync-logic');
 const { requireAuth } = require('./auth');
+const { roleFor, requireAdmin, requireSyncPermission, isAdminListConfigured, warnIfAdminListMissing } = require('./authz');
 const { buildConfigToSave, ConfigValidationError, redactConfig } = require('./config-security');
 const { acquireSyncLock, SyncInProgressError } = require('./sync-lock');
 const { SyncSafetyError, DEFAULT_MAX_DEACTIVATIONS } = require('./sync-plan');
@@ -124,6 +125,14 @@ function isValidJobId(jobId) {
     return (typeof jobId === 'string' || typeof jobId === 'number') && /^[A-Za-z0-9_-]{1,64}$/.test(String(jobId));
 }
 
+app.get('/api/me', (req, res) => {
+    res.status(200).json({
+        email: req.user?.email || null,
+        role: roleFor(req.user),
+        adminListConfigured: isAdminListConfigured(),
+    });
+});
+
 app.get('/api/config', async (req, res) => {
     try {
         const defaultConfig = {
@@ -160,7 +169,7 @@ app.get('/api/config', async (req, res) => {
 });
 
 
-app.post('/api/config', async (req, res) => {
+app.post('/api/config', requireAdmin, async (req, res) => {
     try {
         const currentDoc = await configDocRef.get();
         const currentConfig = currentDoc.exists ? currentDoc.data() : {};
@@ -191,7 +200,7 @@ app.post('/api/config', async (req, res) => {
     }
 });
 
-app.post('/api/sync', async (req, res) => {
+app.post('/api/sync', requireSyncPermission, async (req, res) => {
     const simulate = req.body?.simulate === true;
     // Only an interactive admin (via IAP) can override the deactivation limit,
     // never the scheduler.
@@ -239,7 +248,7 @@ app.post('/api/ccaas-details', async (req, res) => {
     }
 });
 
-app.post('/api/ccaas-test', async (req, res) => {
+app.post('/api/ccaas-test', requireAdmin, async (req, res) => {
     try {
         const config = await _getHydratedConfig({ ccaas: req.body || {} });
         if (!config) return res.status(400).send('Configuration must be saved before testing.');
@@ -261,7 +270,7 @@ app.post('/api/ccaas-jobs', async (req, res) => {
     }
 });
 
-app.post('/api/ccaas-jobs/proceed', async (req, res) => {
+app.post('/api/ccaas-jobs/proceed', requireAdmin, async (req, res) => {
     try {
         const { jobId } = req.body || {};
         if (!isValidJobId(jobId)) {
@@ -294,7 +303,7 @@ app.get('/api/ccaas-jobs/scheme-errors/:jobId', async (req, res) => {
 });
 
 
-app.post('/api/directory-test', async (req, res) => {
+app.post('/api/directory-test', requireAdmin, async (req, res) => {
     try {
         const config = await _getHydratedConfig({ directory: req.body || {} });
          if (!config) return res.status(400).send('Configuration must be saved before testing.');
@@ -440,5 +449,6 @@ app.get(/^(?!\/api).*/, staticLimiter, (req, res) => {
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
     console.log(`Server listening on port ${PORT}`);
+    warnIfAdminListMissing();
 });
 
