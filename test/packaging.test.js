@@ -29,6 +29,7 @@ function localRequires(file, seen = new Set()) {
     seen.add(file);
     const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
     for (const m of src.matchAll(/require\(['"]\.\/([^'"]+)['"]\)/g)) {
+        if (m[1].endsWith('.json')) { seen.add(m[1]); continue; }
         const dep = m[1].endsWith('.js') ? m[1] : `${m[1]}.js`;
         localRequires(dep, seen);
     }
@@ -40,6 +41,9 @@ test('Dockerfile copies every local module that index.js loads', () => {
     const copiesAllJs = /COPY --from=builder \/usr\/src\/app\/\*\.js \.\//.test(dockerfile);
     for (const mod of localRequires('index.js')) {
         assert.ok(!mod.includes('/'), `${mod} is in a subdirectory; update the Dockerfile COPY rules`);
-        assert.ok(copiesAllJs || dockerfile.includes(`/usr/src/app/${mod}`), `Dockerfile does not copy ${mod}`);
+        const copied = mod === 'package.json'
+            ? dockerfile.includes('/usr/src/app/package*.json')
+            : (copiesAllJs || dockerfile.includes(`/usr/src/app/${mod}`));
+        assert.ok(copied, `Dockerfile does not copy ${mod}`);
     }
 });
