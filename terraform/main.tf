@@ -36,6 +36,7 @@ locals {
     "iap.googleapis.com",
     "secretmanager.googleapis.com",
     "admin.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
     "logging.googleapis.com",
     "monitoring.googleapis.com",
   ], local.cloud_run_iap ? [] : ["compute.googleapis.com"])
@@ -214,4 +215,33 @@ resource "google_iap_settings" "cloud_run" {
       programmatic_clients = [var.scheduler_oauth_client_id]
     }
   }
+}
+
+# --- Build service account (for `gcloud builds submit --service-account`) ---
+# Orgs that disable automatic grants to default service accounts leave the
+# Compute Engine default SA without roles, so builds need their own SA.
+
+resource "google_service_account" "build" {
+  account_id   = "ccaas-sync-build"
+  display_name = "CCaaS Sync image builds"
+}
+
+resource "google_project_iam_member" "build_logs" {
+  project = var.project_id
+  role    = "roles/logging.logWriter"
+  member  = google_service_account.build.member
+}
+
+resource "google_artifact_registry_repository_iam_member" "build_push" {
+  location   = google_artifact_registry_repository.repo.location
+  repository = google_artifact_registry_repository.repo.name
+  role       = "roles/artifactregistry.writer"
+  member     = google_service_account.build.member
+}
+
+# Cloud Build reads the uploaded source from the project's default bucket.
+resource "google_project_iam_member" "build_source" {
+  project = var.project_id
+  role    = "roles/storage.objectViewer"
+  member  = google_service_account.build.member
 }

@@ -26,6 +26,11 @@ output "service_account_client_id" {
   value       = google_service_account.runtime.unique_id
 }
 
+output "build_service_account" {
+  description = "Use with: gcloud builds submit --config=terraform/cloudbuild-image.yaml --service-account=projects/PROJECT/serviceAccounts/<this> (see terraform/README.md)."
+  value       = google_service_account.build.email
+}
+
 output "iap_audience" {
   value = local.iap_audience
 }

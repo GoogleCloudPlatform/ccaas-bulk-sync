@@ -21,9 +21,12 @@ cp terraform.tfvars.example terraform.tfvars   # edit it
 
 # 1. Create the Artifact Registry repository, then build the image into it.
 terraform init
-terraform apply -target=google_artifact_registry_repository.repo
-gcloud builds submit .. --project=PROJECT --region=REGION \
-  --tag=REGION-docker.pkg.dev/PROJECT/ccaas-sync-repo/ccaas-sync-service:v1.4.0
+terraform apply -target=google_artifact_registry_repository_iam_member.build_push \
+  -target=google_project_iam_member.build_logs -target=google_project_iam_member.build_source
+(cd .. && gcloud builds submit . --project=PROJECT --region=REGION \
+  --config=terraform/cloudbuild-image.yaml \
+  --service-account=projects/PROJECT/serviceAccounts/$(terraform -chdir=terraform output -raw build_service_account) \
+  --substitutions=_IMAGE=REGION-docker.pkg.dev/PROJECT/ccaas-sync-repo/ccaas-sync-service:v1.4.0)
 
 # 2. Deploy everything else.
 terraform apply
