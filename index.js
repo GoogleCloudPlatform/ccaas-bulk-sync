@@ -21,6 +21,7 @@ const { CloudSchedulerClient } = require('@google-cloud/scheduler');
 const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
 const path = require('path');
 const syncLogic = require('./sync-logic');
+const secrets = require('./secrets');
 const { requireAuth } = require('./auth');
 const { roleFor, requireAdmin, requireSyncPermission, isAdminListConfigured, warnIfAdminListMissing } = require('./authz');
 const { buildConfigToSave, ConfigValidationError, redactConfig } = require('./config-security');
@@ -54,42 +55,8 @@ const configDocRef = firestore.collection('ccaas-sync-config').doc('latest');
 
 // --- Helper Functions ---
 
-async function _getSecret(secretName) {
-    if (!secretName) return null;
-    const projectId = await secretClient.getProjectId();
-    const [version] = await secretClient.accessSecretVersion({
-        name: `projects/${projectId}/secrets/${secretName}/versions/latest`,
-    });
-    return version.payload.data.toString('utf8');
-}
-
-async function _setSecret(secretName, secretValue) {
-    if (!secretName || !secretValue) return;
-    const projectId = await secretClient.getProjectId();
-    const parent = `projects/${projectId}`;
-    
-    try {
-         await secretClient.addSecretVersion({
-            parent: `${parent}/secrets/${secretName}`,
-            payload: { data: Buffer.from(secretValue, 'utf8') },
-        });
-    } catch (error) {
-       if (error.code === 5) { // NOT_FOUND
-            await secretClient.createSecret({
-                parent,
-                secretId: secretName,
-                secret: { replication: { automatic: {} } },
-            });
-            await secretClient.addSecretVersion({
-                parent: `${parent}/secrets/${secretName}`,
-                payload: { data: Buffer.from(secretValue, 'utf8') },
-            });
-        } else {
-            throw error;
-        }
-    }
-    console.log(`Updated secret: ${secretName}`);
-}
+const _getSecret = (secretName) => secrets.getSecret(secretClient, secretName);
+const _setSecret = (secretName, secretValue) => secrets.setSecret(secretClient, secretName, secretValue);
 
 
 async function _getHydratedConfig(bodyWithSecrets = null) {
