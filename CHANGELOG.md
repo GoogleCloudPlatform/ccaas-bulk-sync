@@ -15,10 +15,8 @@
 
 ### Added
 - **Admin allowlist (`ADMIN_EMAILS`):** only admins can save the configuration, run live syncs, proceed CCaaS jobs and run connection tests. Other IAP users are read-only viewers who can still run simulations. New `GET /api/me`; the UI shows your role and disables admin-only actions. When `ADMIN_EMAILS` is unset, everyone stays an admin and a warning is shown. **Set it after upgrading.**
-
 - **Least-privilege IAM (README step 4.2):** per-secret `secretAccessor` + `secretVersionManager` instead of project-wide Secret Manager roles; a custom role for Scheduler jobs only, instead of `roles/cloudscheduler.admin`; `serviceAccountUser` on the service account itself only. The service no longer creates secrets.
 - **Old secret versions are disabled** when a credential is saved, so replaced credentials can't be read.
-
 - **UI hardening:** Vue is served from the app instead of unpkg; the inline script and styles moved to `/app.js` and `/app.css`; Google Fonts import removed. `helmet` sets security headers and a strict Content Security Policy (same-origin only; `'unsafe-eval'` only for Vue's template compiler; `frame-ancestors 'none'`).
 - **Container hardening:** runs as the unprivileged `node` user; `npm ci` with a pruned production `node_modules`; `NODE_ENV=production`. CI checks that the container doesn't run as root, and checks the security headers.
 
