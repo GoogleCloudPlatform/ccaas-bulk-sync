@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased (1.4.0)
+## 1.4.0: Operations
+
+### Upgrade notes
+1. Redeploy. For a new deployment, consider [Terraform](terraform/README.md).
+2. Optional: **keyless Google Workspace**. Grant the service account `roles/iam.serviceAccountTokenCreator` on itself, authorize its client ID for domain-wide delegation, select **Keyless** in the UI and click **Save**. Then delete the old key (README "Google Workspace without a stored key").
+3. Optional: set up alerts with `scripts/setup-alerts.sh`, or with `notify_email` in Terraform.
+
 ### Added
 - **Sync run history:** every sync (scheduled or manual, live or simulated, including blocked and failed runs) is recorded in Firestore (`ccaas-sync-runs`; newest 200 kept) with trigger, user, outcome, counts, job ID and duration. No user emails or names are stored. New `GET /api/sync-runs` and a **Recent Sync Runs** table in the UI.
 - **Terraform module (`terraform/`):** deploys the whole stack (APIs, Firestore, Artifact Registry, empty secrets, least-privilege service account, Cloud Run, IAP in either `cloud_run` or `load_balancer` mode, optional alerts). Credentials never enter Terraform state. CI runs `terraform fmt` and `terraform validate`.
