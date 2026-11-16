@@ -6,6 +6,9 @@
 - Fixed CodeQL findings: user-controlled values in log format strings, a slow regex in Bearer header parsing, and missing rate limiting (now 120 requests/min per IP on `/api`, 600/min on static files). Job IDs are validated.
 - `npm audit`: **0 vulnerabilities** in production dependencies.
 
+### Added
+- **Admin allowlist (`ADMIN_EMAILS`):** only admins can save the configuration, run live syncs, proceed CCaaS jobs and run connection tests. Other IAP users are read-only viewers who can still run simulations. New `GET /api/me`; the UI shows your role and disables admin-only actions. When `ADMIN_EMAILS` is unset, everyone stays an admin and a warning is shown. **Set it after upgrading.**
+
 ### Changed
 - Major dependency upgrades: `@google-cloud/firestore` 9, `@google-cloud/secret-manager` 8, `@google-cloud/scheduler` 6, `googleapis` 190, `google-auth-library` 11, `ldapts` 9, `@azure/msal-node` 7, `express` 5, `express-rate-limit` 8. All require Node.js 22, which the container already uses.
 - Removed `node-fetch`, `isomorphic-fetch` and `form-data`; the code uses Node.js 22's built-in `fetch`, `FormData` and `Blob`.

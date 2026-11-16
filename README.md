@@ -235,6 +235,22 @@ gcloud run services update $SERVICE_NAME \
   --update-env-vars=IAP_AUDIENCE=/projects/${PROJECT_NUMBER}/global/backendServices/${BACKEND_ID}
 ```
 
+### 8. Restrict who can make changes (admin allowlist)
+
+IAP decides who can open the app. `ADMIN_EMAILS` decides who can **change** things:
+
+| Role | Can |
+|---|---|
+| **Admin** (listed in `ADMIN_EMAILS`) | Save the configuration (including credentials), run live syncs, proceed CCaaS jobs, run connection tests |
+| **Viewer** (anyone else with IAP access) | View the configuration, CCaaS details, jobs and directory groups, and run simulations |
+
+```bash
+gcloud run services update $SERVICE_NAME --region=$REGION \
+  --update-env-vars='^;^ADMIN_EMAILS=alice@example.com,bob@example.com,domain:ops.example.com'
+```
+
+Entries are email addresses or `domain:<domain>`. The `^;^` prefix tells gcloud to use `;` as the separator between variables, so the commas stay inside the value. The scheduler's service account can always run scheduled syncs. **If `ADMIN_EMAILS` is not set, every IAP user is an admin** (the behavior before 1.3.0). The UI shows a warning when this is the case.
+
 ### Option B: IAP directly on Cloud Run (no load balancer)
 
 Instead of steps 6 and 7, you can turn on IAP directly on the Cloud Run service. This needs no load balancer, domain, certificate or static IP. Users sign in at the service's `run.app` URL.
