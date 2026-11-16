@@ -77,12 +77,21 @@ jobs:
           }
           check GET  /                 200
           check GET  /output.css       200
+          check GET  /app.js           200
+          check GET  /vendor/vue.global.prod.js 200
           check GET  /api/config       401
           check POST /api/config       401
           check POST /api/sync         401
           # A forged IAP header must be rejected.
           code=$(curl -s -o /dev/null -w '%{http_code}' -H 'x-goog-iap-jwt-assertion: a.b.c' http://localhost:8080/api/config)
           echo "forged IAP JWT -> $code (expected 401)"; [ "$code" = "401" ]
+          # Security headers and a strict CSP (no third-party origins).
+          headers=$(curl -sI http://localhost:8080/)
+          echo "$headers" | grep -i '^content-security-policy:.*default-src .self.' 
+          if echo "$headers" | grep -i '^content-security-policy:' | grep -qiE 'unpkg|https?://'; then echo "CSP allows a third-party origin"; exit 1; fi
+          echo "$headers" | grep -i '^x-content-type-options: nosniff'
+          # The container must not run as root.
+          uid=$(docker exec app id -u); echo "container uid: $uid"; [ "$uid" != "0" ]
       - name: Container logs
         if: always()
         run: docker logs app || true

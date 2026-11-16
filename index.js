@@ -16,6 +16,7 @@
 
 const express = require('express');
 const { rateLimit } = require('express-rate-limit');
+const helmet = require('helmet');
 const { Firestore } = require('@google-cloud/firestore');
 const { CloudSchedulerClient } = require('@google-cloud/scheduler');
 const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
@@ -30,6 +31,27 @@ const { SyncSafetyError, DEFAULT_MAX_DEACTIVATIONS } = require('./sync-plan');
 
 const app = express();
 app.disable('x-powered-by');
+
+// Security headers. The UI loads only same-origin resources. Vue's in-browser
+// template compiler needs 'unsafe-eval'; there are no inline scripts or styles.
+app.use(helmet({
+    contentSecurityPolicy: {
+        useDefaults: false,
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "'unsafe-eval'"],
+            styleSrc: ["'self'"],
+            imgSrc: ["'self'", 'data:'],
+            fontSrc: ["'self'"],
+            connectSrc: ["'self'"],
+            objectSrc: ["'none'"],
+            baseUri: ["'self'"],
+            formAction: ["'self'"],
+            frameAncestors: ["'none'"],
+        },
+    },
+    crossOriginEmbedderPolicy: false,
+}));
 app.use(express.json());
 
 // Cloud Run (and the load balancer) put the client IP in X-Forwarded-For.
@@ -406,6 +428,12 @@ async function setupScheduler(scheduleConfig = { type: 'manual' }) {
 
 // --- Static File Server ---
 const publicPath = path.join(__dirname, 'public');
+// Serve Vue from the installed package instead of a third-party CDN.
+const vuePath = require.resolve('vue/dist/vue.global.prod.js');
+app.get('/vendor/vue.global.prod.js', staticLimiter, (req, res) => {
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.sendFile(vuePath);
+});
 app.use(staticLimiter, express.static(publicPath));
 
 app.get(/^(?!\/api).*/, staticLimiter, (req, res) => {

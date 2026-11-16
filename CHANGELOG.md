@@ -12,6 +12,9 @@
 - **Least-privilege IAM (README step 4.2):** per-secret `secretAccessor` + `secretVersionManager` instead of project-wide Secret Manager roles; a custom role for Scheduler jobs only, instead of `roles/cloudscheduler.admin`; `serviceAccountUser` on the service account itself only. The service no longer creates secrets.
 - **Old secret versions are disabled** when a credential is saved, so replaced credentials can't be read.
 
+- **UI hardening:** Vue is served from the app instead of unpkg; the inline script and styles moved to `/app.js` and `/app.css`; Google Fonts import removed. `helmet` sets security headers and a strict Content Security Policy (same-origin only; `'unsafe-eval'` only for Vue's template compiler; `frame-ancestors 'none'`).
+- **Container hardening:** runs as the unprivileged `node` user; `npm ci` with a pruned production `node_modules`; `NODE_ENV=production`. CI checks that the container doesn't run as root, and checks the security headers.
+
 ### Changed
 - Major dependency upgrades: `@google-cloud/firestore` 9, `@google-cloud/secret-manager` 8, `@google-cloud/scheduler` 6, `googleapis` 190, `google-auth-library` 11, `ldapts` 9, `@azure/msal-node` 7, `express` 5, `express-rate-limit` 8. All require Node.js 22, which the container already uses.
 - Removed `node-fetch`, `isomorphic-fetch` and `form-data`; the code uses Node.js 22's built-in `fetch`, `FormData` and `Blob`.
