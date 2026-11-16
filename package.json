@@ -1,6 +1,6 @@
 {
   "name": "ccaas-bulk-sync",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "A service to synchronize users between a directory and Google Cloud CCaaS.",
   "main": "index.js",
   "scripts": {

@@ -22,6 +22,8 @@ const path = require('path');
 const syncLogic = require('./sync-logic');
 const { requireAuth } = require('./auth');
 const { buildConfigToSave, ConfigValidationError } = require('./config-security');
+const { acquireSyncLock, SyncInProgressError } = require('./sync-lock');
+const { SyncSafetyError, DEFAULT_MAX_DEACTIVATIONS } = require('./sync-plan');
 
 const app = express();
 app.disable('x-powered-by');
@@ -113,6 +115,7 @@ app.get('/api/config', async (req, res) => {
             directory: { type: 'google', adminEmail: '', url: '', bindDN: '', searchBase: '', tenantId: '', clientId: '', entraIdEmailField: 'mail' },
             mappings: [],
             schedule: { type: 'manual', time: '00:00', cron: '* * * * *', initialPollDelay: 15 },
+            safety: { maxDeactivations: DEFAULT_MAX_DEACTIVATIONS },
             syncRole: ''
         };
 
@@ -129,6 +132,7 @@ app.get('/api/config', async (req, res) => {
             ccaas: { ...defaultConfig.ccaas, ...storedConfig.ccaas },
             directory: { ...defaultConfig.directory, ...storedConfig.directory },
             schedule: { ...defaultConfig.schedule, ...storedConfig.schedule },
+            safety: { ...defaultConfig.safety, ...storedConfig.safety },
         };
         
         delete configToReturn.ccaas.apiKeySecretName;
@@ -177,15 +181,38 @@ app.post('/api/config', async (req, res) => {
 });
 
 app.post('/api/sync', async (req, res) => {
+    const simulate = req.body?.simulate === true;
+    // Only an interactive admin (via IAP) can override the deactivation limit,
+    // never the scheduler.
+    const allowLargeDeactivation = req.body?.allowLargeDeactivation === true && req.user?.type !== 'scheduler';
+    const startedBy = req.user?.email || 'unknown';
+    let lock = null;
     try {
-        const { simulate } = req.body; 
         const config = await _getHydratedConfig();
         if (!config) return res.status(400).send('Configuration must be saved before running a sync.');
-        const result = await syncLogic.runSync(config, simulate); 
+        if (!simulate) {
+            lock = await acquireSyncLock(firestore, { startedBy });
+        }
+        console.log(`Sync requested by ${startedBy} (simulate=${simulate}, allowLargeDeactivation=${allowLargeDeactivation}).`);
+        const result = await syncLogic.runSync(config, { simulate, allowLargeDeactivation });
         res.status(200).json(result);
     } catch (error) {
-        console.error('Error during manual sync:', error);
-        res.status(500).send(`Error during manual sync: ${error.message}`);
+        if (error instanceof SyncInProgressError) {
+            console.warn(error.message);
+            return res.status(409).send(error.message);
+        }
+        if (error instanceof SyncSafetyError) {
+            console.warn(`Sync blocked by safety check: ${error.message}`);
+            return res.status(422).json({ blocked: true, reason: error.details.reason, message: error.message, ...error.details });
+        }
+        if (error instanceof syncLogic.GroupNotFoundError) {
+            console.warn(error.message);
+            return res.status(422).send(error.message);
+        }
+        console.error('Error during sync:', error);
+        res.status(500).send(`Error during sync: ${error.message}`);
+    } finally {
+        if (lock) await lock.release();
     }
 });
 
@@ -286,7 +313,40 @@ app.post('/api/directory-groups', async (req, res) => {
     }
 });
 
-async function setupScheduler(scheduleConfig) {
+// A live sync can poll the CCaaS job for several minutes. Give the scheduler
+// enough time (and no automatic retries) so it doesn't start a second sync.
+// Keep this in line with the Cloud Run --timeout in cloudbuild.yaml.
+const SCHEDULER_ATTEMPT_DEADLINE_SECONDS = 900;
+
+function _cronFor(scheduleConfig) {
+    if (scheduleConfig.type === 'hourly') return '0 * * * *';
+    if (scheduleConfig.type === 'daily') {
+        const [hour, minute] = String(scheduleConfig.time || '00:00').split(':');
+        return `${Number(minute) || 0} ${Number(hour) || 0} * * *`;
+    }
+    if (scheduleConfig.type === 'custom') return scheduleConfig.cron;
+    return null;
+}
+
+// Before v1.1.0, REGION wasn't passed to the service, so the job was always
+// created in us-central1. If the service now runs elsewhere, remove that old job
+// so two schedulers don't both trigger syncs.
+const LEGACY_SCHEDULER_LOCATION = 'us-central1';
+
+async function _removeLegacySchedulerJob(projectId, location) {
+    if (location === LEGACY_SCHEDULER_LOCATION) return;
+    const legacyName = schedulerClient.jobPath(projectId, LEGACY_SCHEDULER_LOCATION, 'ccaas-sync-scheduler');
+    try {
+        await schedulerClient.deleteJob({ name: legacyName });
+        console.log(`Removed legacy scheduler job ${legacyName}.`);
+    } catch (error) {
+        if (error.code !== 5) {
+            console.warn(`Could not remove legacy scheduler job ${legacyName}: ${error.message}`);
+        }
+    }
+}
+
+async function setupScheduler(scheduleConfig = { type: 'manual' }) {
     const projectId = await schedulerClient.getProjectId();
     const location = process.env.REGION || 'us-central1';
     const serviceUrl = process.env.SERVICE_URL;
@@ -298,34 +358,27 @@ async function setupScheduler(scheduleConfig) {
     }
 
     const jobName = schedulerClient.jobPath(projectId, location, 'ccaas-sync-scheduler');
-
+    await _removeLegacySchedulerJob(projectId, location);
+    let exists = true;
     try {
         await schedulerClient.getJob({ name: jobName });
-        console.log(`Found existing job: ${jobName}. Deleting before recreation.`);
-        await schedulerClient.deleteJob({ name: jobName });
     } catch (error) {
-        if (error.code !== 5) { 
-            console.error('Error checking/deleting scheduler job:', error);
+        if (error.code !== 5) {
+            console.error('Error checking scheduler job:', error);
             throw error;
         }
-        console.log('No existing scheduler job found. A new one will be created if needed.');
+        exists = false;
     }
 
     if (scheduleConfig.type === 'manual') {
-        console.log('Schedule set to manual. No job will be created.');
+        if (exists) {
+            await schedulerClient.deleteJob({ name: jobName });
+            console.log('Schedule set to manual. Deleted scheduler job.');
+        }
         return;
     }
 
-    let cronSchedule;
-    if (scheduleConfig.type === 'hourly') {
-        cronSchedule = '0 * * * *';
-    } else if (scheduleConfig.type === 'daily') {
-        const [hour, minute] = scheduleConfig.time.split(':');
-        cronSchedule = `${minute} ${hour} * * *`;
-    } else if (scheduleConfig.type === 'custom') {
-        cronSchedule = scheduleConfig.cron;
-    }
-
+    const cronSchedule = _cronFor(scheduleConfig);
     if (!cronSchedule) {
         console.log(`Invalid schedule type: ${scheduleConfig.type}`);
         return;
@@ -342,14 +395,17 @@ async function setupScheduler(scheduleConfig) {
         },
         schedule: cronSchedule,
         timeZone: 'UTC',
+        attemptDeadline: { seconds: SCHEDULER_ATTEMPT_DEADLINE_SECONDS },
+        retryConfig: { retryCount: 0 },
     };
 
-    console.log(`Creating/updating scheduler job with schedule: "${cronSchedule}"`);
-    await schedulerClient.createJob({
-        parent: schedulerClient.locationPath(projectId, location),
-        job: job,
-    });
-    console.log(`Successfully created/updated job: ${jobName}`);
+    // Update in place so the schedule never disappears between delete and create.
+    if (exists) {
+        await schedulerClient.updateJob({ job });
+    } else {
+        await schedulerClient.createJob({ parent: schedulerClient.locationPath(projectId, location), job });
+    }
+    console.log(`Scheduler job ${exists ? 'updated' : 'created'} with schedule "${cronSchedule}" (UTC).`);
 }
 
 

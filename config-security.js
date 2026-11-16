@@ -123,6 +123,18 @@ function _normalizeStoredLdapUrl(value) {
     }
 }
 
+/** Validates the sync safety settings. */
+function validateSafety(safety) {
+    if (!safety || typeof safety !== 'object' || Array.isArray(safety)) {
+        throw new ConfigValidationError('Safety settings must be an object.');
+    }
+    const max = safety.maxDeactivations;
+    if (!Number.isInteger(max) || max < 0 || max > 100000) {
+        throw new ConfigValidationError('Max deactivations per sync must be a whole number between 0 and 100000.');
+    }
+    return { maxDeactivations: max };
+}
+
 function _requireSecretOnDestinationChange({ destinationChanged, hasStoredSecret, newSecretProvided, message }) {
     if (destinationChanged && hasStoredSecret && !newSecretProvided) {
         throw new ConfigValidationError(message);
@@ -216,6 +228,9 @@ function buildConfigToSave(current, incoming) {
     configToSave.mappings = incoming.mappings;
     configToSave.schedule = incoming.schedule;
     configToSave.syncRole = incoming.syncRole;
+    if (incoming.safety !== undefined) {
+        configToSave.safety = validateSafety(incoming.safety);
+    }
 
     return { configToSave, secretsToSet };
 }
@@ -227,4 +242,5 @@ module.exports = {
     validateLdapUrl,
     validateTenantId,
     validateClientId,
+    validateSafety,
 };

@@ -162,6 +162,11 @@
                     <input type="number" v-model.number="config.schedule.initialPollDelay" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm">
                     <p class="mt-1 text-xs text-gray-500">Wait time after upload before checking job status.</p>
                 </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-600 mb-1">Max Deactivations per Sync</label>
+                    <input type="number" min="0" step="1" v-model.number="config.safety.maxDeactivations" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm">
+                    <p class="mt-1 text-xs text-gray-500">Safety limit. A sync that would deactivate more users than this is blocked (scheduled runs always; manual runs ask for confirmation). Use 0 to block all deactivations.</p>
+                </div>
             </div>
         </div>
 
@@ -427,6 +432,33 @@
         </transition>
 
         <transition name="fade">
+            <div v-if="syncResultModal.show" class="modal-backdrop">
+                <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-2xl m-4 max-h-[85vh] overflow-y-auto">
+                    <h3 class="text-lg font-bold" :class="syncResultModal.status === 'success' ? 'text-green-700' : 'text-red-700'">{{ syncResultModal.title }}</h3>
+                    <p class="text-sm text-gray-700 mt-2 whitespace-pre-line">{{ syncResultModal.message }}</p>
+                    <div v-if="syncResultModal.warnings && syncResultModal.warnings.length" class="mt-4 text-sm bg-yellow-50 border border-yellow-300 rounded p-3">
+                        <p class="font-semibold text-yellow-800">Warnings</p>
+                        <ul class="list-disc ml-5 text-yellow-900">
+                            <li v-for="(w, i) in syncResultModal.warnings" :key="i">{{ w }}</li>
+                        </ul>
+                    </div>
+                    <div v-if="syncResultModal.preview" class="mt-4 space-y-2 text-sm">
+                        <details v-for="kind in ['add', 'update', 'deactivate']" :key="kind" class="border rounded p-2">
+                            <summary class="cursor-pointer font-semibold capitalize">{{ kind }} ({{ syncResultModal.preview[kind].length }}<span v-if="syncResultModal.preview[kind].length >= 200">+</span>)</summary>
+                            <ul class="mt-2 ml-4 font-mono text-xs text-gray-700">
+                                <li v-for="email in syncResultModal.preview[kind]" :key="email">{{ email }}</li>
+                            </ul>
+                        </details>
+                    </div>
+                    <div class="mt-6 flex justify-end gap-3">
+                        <button v-if="syncResultModal.canOverride" @click="confirmLargeDeactivation" class="px-6 py-2 bg-red-600 text-white font-semibold rounded-lg hover:bg-red-700">Run Anyway</button>
+                        <button @click="syncResultModal.show = false" class="px-6 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700">Close</button>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
+        <transition name="fade">
             <div v-if="testResultModal.show" class="modal-backdrop">
                 <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md m-4 text-center">
                      <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full" :class="testResultModal.status === 'success' ? 'bg-green-100' : 'bg-red-100'">
@@ -509,6 +541,7 @@
                     schedule: {
                         initialPollDelay: 15
                     },
+                    safety: { maxDeactivations: 25 },
                     syncRole: ''
                 });
                 const ccaasDetails = ref({ teams: [], roles: [] });
@@ -536,6 +569,7 @@
                 const testResultModal = ref({ show: false, title: '', message: '', status: 'success' });
                 const showGcpHelpModal = ref(false);
                 const showSyncModal = ref(false);
+                const syncResultModal = ref({ show: false, title: '', message: '', status: 'success', preview: null, warnings: [], canOverride: false });
                 const helpModal = ref({ show: false, title: '', content: '' });
 
                 const totalPages = computed(() => {
@@ -635,29 +669,52 @@
                     }
                 };
 
-                const runManualSync = async (simulate) => {
+                const runManualSync = async (simulate, allowLargeDeactivation = false) => {
                     showSyncModal.value = false;
+                    syncResultModal.value.show = false;
                     isSyncing.value = true;
                     try {
-                        const response = await fetch(`${window.location.origin}/api/sync`, { 
+                        const response = await fetch(`${window.location.origin}/api/sync`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ simulate: simulate })
+                            body: JSON.stringify({ simulate: simulate, allowLargeDeactivation: allowLargeDeactivation })
                         });
-                        if (!response.ok) {
-                            const errorText = await response.text();
-                            throw new Error(`Sync failed: ${errorText}`);
+                        const isJson = (response.headers.get('content-type') || '').includes('application/json');
+                        const data = isJson ? await response.json() : { message: await response.text() };
+
+                        if (response.status === 422 && data.blocked) {
+                            syncResultModal.value = {
+                                show: true, title: 'Sync Blocked by Safety Check', message: data.message, status: 'error',
+                                preview: null, warnings: [], canOverride: data.reason === 'deactivation_limit'
+                            };
+                            return;
                         }
-                        const result = await response.json();
-                        showStatusMessage(result.message, 'success', simulate ? 'Simulation Complete' : 'Sync Complete');
+                        if (!response.ok) {
+                            throw new Error(data.message || `Sync failed (${response.status}).`);
+                        }
+                        syncResultModal.value = {
+                            show: true,
+                            title: simulate ? 'Simulation Complete' : 'Sync Complete',
+                            message: data.message,
+                            status: data.blockedBy ? 'error' : 'success',
+                            preview: data.preview || null,
+                            warnings: data.warnings || [],
+                            canOverride: false
+                        };
                         if (!simulate) {
                             fetchJobs();
                         }
                     } catch (error) {
                         console.error("Manual sync error:", error);
-                        showStatusMessage(error.message, 'error', 'Sync Error');
+                        syncResultModal.value = { show: true, title: 'Sync Error', message: error.message, status: 'error', preview: null, warnings: [], canOverride: false };
                     } finally {
                         isSyncing.value = false;
+                    }
+                };
+
+                const confirmLargeDeactivation = () => {
+                    if (window.confirm('This will deactivate more users than the configured safety limit. Make sure you have reviewed a simulation. Continue?')) {
+                        runManualSync(false, true);
                     }
                 };
 
@@ -927,6 +984,8 @@
                     testResultModal,
                     showGcpHelpModal,
                     showSyncModal,
+                    syncResultModal,
+                    confirmLargeDeactivation,
                     helpModal,
                     jobsPagination,
                     totalPages,

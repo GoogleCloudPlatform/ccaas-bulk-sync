@@ -1,302 +1,297 @@
-# **CCaaS Bulk Synchronization Service \- README**
+# CCaaS Bulk Synchronization Service
 
-This document provides instructions to deploy and configure the CCaaS Bulk Synchronization Service on Google Cloud.
+Keeps users in Google Cloud Contact Center as a Service (CCaaS) in sync with groups in your user directory: Google Workspace, Microsoft Active Directory or Microsoft Entra ID. It maps directory groups to CCaaS roles and teams, then adds, updates or deactivates CCaaS users on a schedule or on demand.
 
-## **Local Development**
+It runs on Cloud Run, stores its configuration in Firestore and its credentials in Secret Manager, uses Cloud Scheduler for scheduled syncs, and is protected by Identity-Aware Proxy (IAP).
 
-To run and test the application on your local machine:
+- [Local development](#local-development)
+- [Deployment](#deployment)
+- [Sync safety](#sync-safety)
+- [Upgrading](#upgrading)
+- [Appendix: Microsoft Entra ID setup](#appendix-microsoft-entra-id-setup)
 
-1. **Install Dependencies**: npm install  
-2. **Build CSS**: npm run build:css  
-3. **Run Server**: ALLOW\_INSECURE\_LOCAL\_DEV=true node index.js
-4. **Run Tests**: npm test
+## Local development
 
-The application will be available at http://localhost:8080.
+```bash
+npm install
+npm run build:css
+ALLOW_INSECURE_LOCAL_DEV=true node index.js   # http://localhost:8080
+npm test
+```
 
-**Note:** All /api/\* routes require an authenticated caller (see section 7). ALLOW\_INSECURE\_LOCAL\_DEV=true disables this check for local development only; it is ignored when running on Cloud Run.
+> **Note:** All `/api/*` routes require an authenticated caller (see [step 7](#7-secure-the-application-with-iap)). `ALLOW_INSECURE_LOCAL_DEV=true` turns this check off for local development only, and is ignored when running on Cloud Run.
 
-## **1\. Enable Google Cloud APIs**
+## Deployment
 
-Enable the necessary APIs for your project.
+Each step below reuses the shell variables set in earlier steps, so run them all in the same terminal session.
 
-export PROJECT\_ID=$(gcloud config get-value project)
+### 1. Enable Google Cloud APIs
 
-gcloud services enable \\  
-  run.googleapis.com \\  
-  artifactregistry.googleapis.com \\  
-  cloudbuild.googleapis.com \\  
-  iam.googleapis.com \\  
-  firestore.googleapis.com \\  
-  cloudscheduler.googleapis.com \\  
-  iap.googleapis.com \\  
-  compute.googleapis.com \\  
-  cloudresourcemanager.googleapis.com \\  
-  secretmanager.googleapis.com \\  
+```bash
+export PROJECT_ID=$(gcloud config get-value project)
+export PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')
+export REGION="us-central1"   # or your preferred region
+
+gcloud services enable \
+  run.googleapis.com \
+  artifactregistry.googleapis.com \
+  cloudbuild.googleapis.com \
+  iam.googleapis.com \
+  firestore.googleapis.com \
+  cloudscheduler.googleapis.com \
+  iap.googleapis.com \
+  compute.googleapis.com \
+  cloudresourcemanager.googleapis.com \
+  secretmanager.googleapis.com \
   admin.googleapis.com
+```
 
-## **2\. Create the Firestore Database**
+### 2. Create the Firestore database
 
-Create a Firestore database in Native mode to store the application's configuration.
+```bash
+gcloud firestore databases create --location=$REGION
+```
 
-export REGION="us-central1" \# Or your preferred region
+### 3. Create an Artifact Registry repository
 
-gcloud firestore databases create \--location=$REGION
+```bash
+export REPO_NAME="ccaas-sync-repo"
 
-## **3\. Create an Artifact Registry Repository**
+gcloud artifacts repositories create $REPO_NAME \
+  --repository-format=docker \
+  --location=$REGION \
+  --description="Repository for CCaaS Sync Service"
+```
 
-Create a repository to store the Docker container image for the application.
+### 4. Create secrets and service accounts
 
-export REPO\_NAME="ccaas-sync-repo"
+#### 4.1 Secrets
 
-gcloud artifacts repositories create $REPO\_NAME \\  
-    \--repository-format=docker \\  
-    \--location=$REGION \\  
-    \--description="Repository for CCaaS Sync Service"
+```bash
+for s in ccaas-api-key gcp-sa-key ad-bind-password entra-client-secret; do
+  gcloud secrets create $s --replication-policy="automatic"
+done
+```
 
-## **4\. Create Secrets and Service Accounts**
+#### 4.2 Application service account
 
-### **4.1 Create Secrets in Secret Manager**
+```bash
+export SERVICE_ACCOUNT_NAME="ccaas-sync-sa"
+export SERVICE_ACCOUNT_EMAIL="${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 
-Create empty secrets to hold your credentials.
+gcloud iam service-accounts create $SERVICE_ACCOUNT_NAME \
+  --display-name="CCaaS Sync Service Account"
 
-gcloud secrets create ccaas-api-key \--replication-policy="automatic"  
-gcloud secrets create gcp-sa-key \--replication-policy="automatic"  
-gcloud secrets create ad-bind-password \--replication-policy="automatic"  
-gcloud secrets create entra-client-secret \--replication-policy="automatic"
+# Manage the Cloud Scheduler job
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
+  --role="roles/cloudscheduler.admin"
 
-### **4.2 Create and Configure Service Accounts**
+# Read and write the configuration in Firestore
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
+  --role="roles/datastore.user"
 
-**a. Create a Dedicated Service Account for the Application**
+# Read and update secrets
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
+  --role="roles/secretmanager.admin"
 
-export SERVICE\_ACCOUNT\_NAME="ccaas-sync-sa"  
-export SERVICE\_ACCOUNT\_EMAIL="${SERVICE\_ACCOUNT\_NAME}@${PROJECT\_ID}.iam.gserviceaccount.com"
+# Let the service account act as itself for scheduler jobs
+gcloud iam service-accounts add-iam-policy-binding $SERVICE_ACCOUNT_EMAIL \
+  --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
+  --role="roles/iam.serviceAccountUser"
+```
 
-gcloud iam service-accounts create $SERVICE\_ACCOUNT\_NAME \\  
-    \--display-name="CCaaS Sync Service Account"
+#### 4.3 Cloud Build permissions
 
-**b. Grant Permissions to the Application's Service Account**
+```bash
+export CLOUDBUILD_SA="${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com"
 
-\# Grant permission to manage Cloud Scheduler  
-gcloud projects add-iam-policy-binding $PROJECT\_ID \\  
-    \--member="serviceAccount:${SERVICE\_ACCOUNT\_EMAIL}" \\  
-    \--role="roles/cloudscheduler.admin"
+for role in roles/run.admin roles/artifactregistry.writer roles/cloudbuild.builds.builder; do
+  gcloud projects add-iam-policy-binding $PROJECT_ID \
+    --member="serviceAccount:${CLOUDBUILD_SA}" --role="$role"
+done
 
-\# Grant permission to access Firestore  
-gcloud projects add-iam-policy-binding $PROJECT\_ID \\  
-    \--member="serviceAccount:${SERVICE\_ACCOUNT\_EMAIL}" \\  
-    \--role="roles/datastore.user"
+gcloud iam service-accounts add-iam-policy-binding $SERVICE_ACCOUNT_EMAIL \
+  --member="serviceAccount:${CLOUDBUILD_SA}" \
+  --role="roles/iam.serviceAccountUser"
+```
 
-\# Grant permission to fully manage Secret Manager secrets  
-gcloud projects add-iam-policy-binding $PROJECT\_ID \\  
-    \--member="serviceAccount:${SERVICE\_ACCOUNT\_EMAIL}" \\  
-    \--role="roles/secretmanager.admin"
+### 5. Build and deploy
 
-\# Grant permission for the service account to act as itself for scheduler jobs  
-gcloud iam service-accounts add-iam-policy-binding ${SERVICE\_ACCOUNT\_EMAIL} \\  
-    \--member="serviceAccount:${SERVICE\_ACCOUNT\_EMAIL}" \\  
-    \--role="roles/iam.serviceAccountUser"
+```bash
+export SERVICE_NAME="ccaas-sync-service"
 
-**c. Grant Permissions to Cloud Build**
+gcloud builds submit . \
+  --config=cloudbuild.yaml \
+  --substitutions=_REGION=$REGION,_REPO_NAME=$REPO_NAME,_SERVICE_NAME=$SERVICE_NAME,_SERVICE_ACCOUNT=$SERVICE_ACCOUNT_EMAIL
+```
 
-export PROJECT\_NUMBER=$(gcloud projects describe $PROJECT\_ID \--format='value(projectNumber)')
+Cloud Build deploys the service with:
+- `--no-allow-unauthenticated` and `--ingress=internal-and-cloud-load-balancing`, so the `*.run.app` URL can't be reached from the internet;
+- `--timeout=900`, so a live sync has time to finish.
 
-gcloud projects add-iam-policy-binding $PROJECT\_ID \\  
-    \--member="serviceAccount:${PROJECT\_NUMBER}@cloudbuild.gserviceaccount.com" \\  
-    \--role="roles/run.admin"
+Until you complete [step 7.3](#73-configure-the-service-to-verify-iap-identities), the UI shows "Service authentication is not configured".
 
-\# Grant Cloud Build the ability to act as the Cloud Run service account  
-gcloud iam service-accounts add-iam-policy-binding ${SERVICE\_ACCOUNT\_EMAIL} \\  
-    \--member="serviceAccount:${PROJECT\_NUMBER}@cloudbuild.gserviceaccount.com" \\  
-    \--role="roles/iam.serviceAccountUser"
+Allow the application's service account to invoke the service. Cloud Scheduler needs this to trigger syncs.
 
-gcloud projects add-iam-policy-binding $PROJECT\_ID \\  
-    \--member="serviceAccount:${PROJECT\_NUMBER}@cloudbuild.gserviceaccount.com" \\  
-    \--role="roles/artifactregistry.writer"
+```bash
+gcloud run services add-iam-policy-binding $SERVICE_NAME \
+  --region=$REGION \
+  --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
+  --role="roles/run.invoker"
+```
 
-gcloud projects add-iam-policy-binding $PROJECT\_ID \\  
-    \--member="serviceAccount:${PROJECT\_NUMBER}@cloudbuild.gserviceaccount.com" \\  
-    \--role="roles/cloudbuild.builds.builder"
+### 6. Set up the load balancer and custom domain
 
-## **5\. Build and Deploy the Service**
+```bash
+export DOMAIN="sync.your-domain.com"   # replace with your domain
 
-This step uses Cloud Build to package the application into a Docker container and deploy it to Cloud Run.
+gcloud compute network-endpoint-groups create ccaas-sync-neg \
+  --region=$REGION \
+  --network-endpoint-type=serverless \
+  --cloud-run-service=$SERVICE_NAME
 
-The service is deployed with \--no-allow-unauthenticated and \--ingress=internal-and-cloud-load-balancing, so its \*.run.app URL is not reachable from the internet. Users access it only through the IAP-protected load balancer configured in sections 6 and 7. The web UI will return "Service authentication is not configured" until you complete section 7.3.
+gcloud compute backend-services create ccaas-sync-backend --global
+gcloud compute backend-services add-backend ccaas-sync-backend \
+  --global \
+  --network-endpoint-group=ccaas-sync-neg \
+  --network-endpoint-group-region=$REGION
 
-export SERVICE\_NAME="ccaas-sync-service"
+gcloud compute url-maps create ccaas-sync-url-map --default-service=ccaas-sync-backend
 
-gcloud builds submit . \\  
-  \--config=cloudbuild.yaml \\  
-  \--substitutions=\_REGION=$REGION,\_REPO\_NAME=$REPO\_NAME,\_SERVICE\_NAME=$SERVICE\_NAME,\_SERVICE\_ACCOUNT=$SERVICE\_ACCOUNT\_EMAIL
+gcloud compute ssl-certificates create ccaas-sync-ssl-cert --domains=$DOMAIN --global
 
-### **5.1 Grant Invocation Permission to Service Account**
+gcloud compute target-https-proxies create ccaas-sync-https-proxy \
+  --ssl-certificates=ccaas-sync-ssl-cert \
+  --url-map=ccaas-sync-url-map \
+  --global
 
-Allow the application's service account to invoke the Cloud Run service. This is required for Cloud Scheduler to trigger the sync.
+gcloud compute addresses create ccaas-sync-lb-ip --global
+export LB_IP=$(gcloud compute addresses describe ccaas-sync-lb-ip --global --format="value(address)")
 
-gcloud run services add-iam-policy-binding $SERVICE\_NAME \\  
-    \--region=$REGION \\  
-    \--member="serviceAccount:${SERVICE\_ACCOUNT\_EMAIL}" \\  
-    \--role="roles/run.invoker"
+gcloud compute forwarding-rules create ccaas-sync-forwarding-rule \
+  --address=ccaas-sync-lb-ip \
+  --global \
+  --target-https-proxy=ccaas-sync-https-proxy \
+  --ports=443
 
-## **6\. Set up Load Balancer and Custom Domain**
+echo "Create a DNS A record for $DOMAIN pointing to $LB_IP"
+```
 
-Configure an external HTTPS load balancer to provide a custom domain and SSL for the service.
+**Action required:** create a DNS `A` record for your domain pointing to the IP address printed above.
 
-### **6.1 Create a Serverless NEG**
+### 7. Secure the application with IAP
 
-gcloud compute network-endpoint-groups create ccaas-sync-neg \\  
-    \--region=$REGION \\  
-    \--network-endpoint-type=serverless \\  
-    \--cloud-run-service=$SERVICE\_NAME
+#### 7.1 OAuth consent screen and IAP client
 
-### **6.2 Create a Backend Service**
+```bash
+gcloud beta services identity create --service=iap.googleapis.com --project=$PROJECT_ID
 
-gcloud compute backend-services create ccaas-sync-backend \\  
-    \--global
+gcloud iap oauth-brands create \
+  --application_title="CCaaS Sync Service" \
+  --support_email=$(gcloud config get-value account)
 
-gcloud compute backend-services add-backend ccaas-sync-backend \\  
-    \--global \\  
-    \--network-endpoint-group=ccaas-sync-neg \\  
-    \--network-endpoint-group-region=$REGION
+gcloud iap oauth-clients create $(gcloud iap oauth-brands list --format='value(name)') \
+  --display_name="CCaaS Sync IAP Client"
+```
 
-### **6.3 Create a URL Map**
+#### 7.2 Enable IAP and grant access
 
-gcloud compute url-maps create ccaas-sync-url-map \\  
-    \--default-service=ccaas-sync-backend
+```bash
+# Enable IAP on the backend service
+gcloud compute backend-services update ccaas-sync-backend --global --iap=enabled
 
-### **6.4 Create a Google-Managed SSL Certificate**
+# Allow IAP to invoke the Cloud Run service
+gcloud run services add-iam-policy-binding $SERVICE_NAME \
+  --region=$REGION \
+  --member="serviceAccount:service-${PROJECT_NUMBER}@gcp-sa-iap.iam.gserviceaccount.com" \
+  --role="roles/run.invoker"
 
-export DOMAIN="sync.your-domain.com" \# \<-- REPLACE with your actual domain
+# Grant users access (comma-separated list)
+export IAP_MEMBERS="user:your-email@example.com"
+for member in ${IAP_MEMBERS//,/ }; do
+  gcloud iap web add-iam-policy-binding \
+    --member="$member" \
+    --role="roles/iap.httpsResourceAccessor" \
+    --resource-type=backend-services \
+    --service=ccaas-sync-backend
+done
 
-gcloud compute ssl-certificates create ccaas-sync-ssl-cert \\  
-    \--domains=$DOMAIN \\  
-    \--global
+# Verify
+gcloud iap web get-iam-policy --resource-type=backend-services --service=ccaas-sync-backend
+```
 
-### **6.5 Create the HTTPS Proxy**
+#### 7.3 Configure the service to verify IAP identities
 
-gcloud compute target-https-proxies create ccaas-sync-https-proxy \\  
-    \--ssl-certificates=ccaas-sync-ssl-cert \\  
-    \--url-map=ccaas-sync-url-map \\  
-    \--global
+The application checks the signed IAP header (`x-goog-iap-jwt-assertion`) on every API request, and rejects any request that didn't come through IAP.
 
-### **6.6 Create a Static IP and Forwarding Rule**
+```bash
+export BACKEND_ID=$(gcloud compute backend-services describe ccaas-sync-backend --global --format='value(id)')
 
-gcloud compute addresses create ccaas-sync-lb-ip \--global
+gcloud run services update $SERVICE_NAME \
+  --region=$REGION \
+  --update-env-vars=IAP_AUDIENCE=/projects/${PROJECT_NUMBER}/global/backendServices/${BACKEND_ID}
+```
 
-export LB\_IP=$(gcloud compute addresses describe ccaas-sync-lb-ip \--global \--format="value(address)")  
-echo "Load Balancer IP Address: $LB\_IP"  
-echo "Please create an 'A' record in your DNS for $DOMAIN pointing to this IP address."
+## Sync safety
 
-gcloud compute forwarding-rules create ccaas-sync-forwarding-rule \\  
-    \--address=ccaas-sync-lb-ip \\  
-    \--global \\  
-    \--target-https-proxy=ccaas-sync-https-proxy \\  
-    \--ports=443
+Each sync works out which users to add, update and deactivate, then submits one CCaaS bulk job. To prevent accidental mass deactivation:
 
-**Action Required:** Go to your DNS provider and create an "A" record for your domain that points to the IP address output above.
+| Safeguard | Behavior |
+|---|---|
+| **Missing group** | If a mapped directory group can't be found, the whole sync is aborted. It no longer counts as "no members". |
+| **Empty directory** | If no mapped group returns any users, but CCaaS has users managed by this tool, the sync is aborted. This check can't be overridden. |
+| **Deactivation limit** | **Max Deactivations per Sync** (default 25; 0 blocks all deactivations). Scheduled syncs over the limit are blocked. Manual syncs over the limit show a **Run Anyway** option that requires confirmation. |
+| **Simulation** | **Simulate Only** shows the counts and the email addresses that would be added, updated or deactivated, and warns when a live run would be blocked. |
+| **One sync at a time** | A Firestore lock prevents overlapping live syncs (manual plus scheduled). A second request gets HTTP 409. |
 
-## **7\. Secure the Application with IAP**
+Other behavior to be aware of:
+- Emails are compared without regard to case.
+- Users are matched against **all** CCaaS users, across every page of results.
+- If a user matches several team mappings, only the first team is applied, and the result includes a warning.
+- Scheduled times are in UTC.
+- Logs contain only counts and job IDs, never user details.
 
-### **7.1 Create OAuth Consent Screen and IAP OAuth Client**
+## Upgrading
 
-gcloud beta services identity create \--service=iap.googleapis.com \--project=$PROJECT\_ID
+### To 1.1.0 (sync safety)
 
-export SUPPORT\_EMAIL=$(gcloud config get-value account)
+1. Pull the latest code and redeploy ([step 5](#5-build-and-deploy)). Redeploying sets `--timeout=900` and the `REGION` environment variable.
+2. Open the UI, review **Max Deactivations per Sync** (default 25), and click **Save**. Saving recreates the scheduler job with a 15-minute deadline and no automatic retries. If your service isn't in `us-central1`, saving also removes the old scheduler job from `us-central1`.
+3. Run **Simulate Only** and review the results before the next scheduled run. Tenants with more than 100 users, or Entra ID groups with more than 100 members, may see corrections that earlier versions missed because they only read the first page of results.
 
-gcloud iap oauth-brands create \\  
-  \--application\_title="CCaaS Sync Service" \\  
-  \--support\_email=$SUPPORT\_EMAIL
+### To 1.0.1 (security fix, GHSA-47vv-vx4f-pm44)
 
-gcloud iap oauth-clients create $(gcloud iap oauth-brands list \--format='value(name)') \\  
-  \--display\_name="CCaaS Sync IAP Client"
+Deployments created before 1.0.1 used `--allow-unauthenticated`, which made the API reachable without IAP through the `*.run.app` URL. After redeploying and completing [step 7.3](#73-configure-the-service-to-verify-iap-identities):
 
-### **7.2 Enable IAP and Grant Permissions**
+```bash
+# Remove the public invoker binding (if still present) and restrict ingress
+gcloud run services remove-iam-policy-binding $SERVICE_NAME \
+  --region=$REGION --member="allUsers" --role="roles/run.invoker"
+gcloud run services update $SERVICE_NAME --region=$REGION --ingress=internal-and-cloud-load-balancing
 
-**a. Enable IAP on the Backend Service**
+# The run.app URL should now return 403 or 404
+curl -s -o /dev/null -w "%{http_code}\n" -X POST \
+  "$(gcloud run services describe $SERVICE_NAME --region=$REGION --format='value(status.url)')/api/config"
+```
 
-gcloud compute backend-services update ccaas-sync-backend \--global \--iap=enabled
+Then:
+- **Rotate all stored credentials:** the AD bind password, CCaaS API key, Entra client secret and Google service account key.
+- Check that the stored CCaaS host and LDAP URL are correct.
+- Review the Cloud Run request logs for unexpected `POST` requests to `/api/config`, `/api/sync`, `/api/directory-test` or `/api/directory-groups`.
 
-**b. Grant IAP permission to invoke the Cloud Run service**
+Changing the CCaaS host, LDAP URL or Entra tenant/client ID now requires re-entering the matching credential in the same save.
 
-export IAP\_SA="service-${PROJECT\_NUMBER}@gcp-sa-iap.iam.gserviceaccount.com"  
-gcloud run services add-iam-policy-binding $SERVICE\_NAME \\  
-    \--region=$REGION \\  
-    \--member="serviceAccount:${IAP\_SA}" \\  
-    \--role="roles/run.invoker"
+## Appendix: Microsoft Entra ID setup
 
-**c. Grant Users Access to the Application**
-
-export IAP\_MEMBERS="user:your-email@example.com"
-
-IFS=','  
-for member in $IAP\_MEMBERS; do  
-  echo "Granting IAP access to $member"  
-  gcloud iap web add-iam-policy-binding \\  
-      \--member="$member" \\  
-      \--role="roles/iap.httpsResourceAccessor" \\  
-      \--resource-type=backend-services \\  
-      \--service="ccaas-sync-backend"  
-done  
-unset IFS
-
-**d. Verify the IAP Policy**
-
-gcloud iap web get-iam-policy \--resource-type=backend-services \--service=ccaas-sync-backend
-
-### **7.3 Configure the Service to Verify IAP Identities**
-
-The application verifies the signed IAP header (x-goog-iap-jwt-assertion) on every API request and rejects any request that did not pass through IAP. Tell the service which IAP audience to expect:
-
-export BACKEND\_ID=$(gcloud compute backend-services describe ccaas-sync-backend \--global \--format='value(id)')  
-export IAP\_AUDIENCE="/projects/${PROJECT\_NUMBER}/global/backendServices/${BACKEND\_ID}"
-
-gcloud run services update $SERVICE\_NAME \\  
-    \--region=$REGION \\  
-    \--update-env-vars=IAP\_AUDIENCE=$IAP\_AUDIENCE
-
-## **8\. Securing an Existing Deployment (Upgrading)**
-
-Deployments created from earlier versions of this repository were deployed with \--allow-unauthenticated, which made the API reachable without IAP via the \*.run.app URL. After pulling this version:
-
-1. Redeploy with Cloud Build (section 5) and set IAP\_AUDIENCE (section 7.3).  
-2. Confirm the public invoker binding has been removed (remove it manually if it is still present):
-
-gcloud run services remove-iam-policy-binding $SERVICE\_NAME \\  
-    \--region=$REGION \\  
-    \--member="allUsers" \\  
-    \--role="roles/run.invoker"
-
-gcloud run services update $SERVICE\_NAME \--region=$REGION \--ingress=internal-and-cloud-load-balancing
-
-3. Verify that the \*.run.app URL is no longer reachable (expect HTTP 403/404):
-
-curl -s -o /dev/null -w "%{http\_code}\\n" -X POST "$(gcloud run services describe $SERVICE\_NAME \--region=$REGION \--format='value(status.url)')/api/config"
-
-4. **Rotate all stored credentials**, because they could have been exposed while the service was public: the Active Directory bind password, the CCaaS API key, the Microsoft Entra client secret, and the Google service account key. Enter the new values in the UI and save.  
-5. Review the stored configuration (CCaaS host, LDAP URL, Entra tenant) in the UI and the Cloud Run request logs for unexpected POST requests to /api/config, /api/sync, or /api/directory-test.
-
-**Note:** When you change the CCaaS host, LDAP URL, or Entra tenant/client ID, the service now requires the matching credential to be re-entered in the same save. This prevents a stored credential from being sent to a different server.
-
-## **Appendix: Microsoft Entra ID Setup**
-
-To get a **Client ID** and **Client Secret** for Microsoft Entra ID, you need to create an App Registration.
-
-1. Navigate to the [**Microsoft Entra admin center**](https://www.google.com/search?q=https://entra.microsoft.com/).  
-2. Go to **Identity \> Applications \> App registrations**.  
-3. Click **\+ New registration**.  
-4. Give it a descriptive name (e.g., CCaaS Sync Service).  
-5. For "Supported account types," select "Accounts in this organizational directory only".  
-6. Click **Register**.  
-7. On the app's overview page, copy the **Application (client) ID** and the **Directory (tenant) ID**. You will need these for the configuration UI.  
-8. In the left navigation, go to **Certificates & secrets**.  
-9. Click **\+ New client secret**, provide a description, and choose an expiration period.  
-10. **Immediately copy the Value of the new secret.** This is your Client Secret, and it will not be shown again after you leave this page.  
-11. In the left navigation, go to **API permissions**.  
-12. Click **\+ Add a permission**, then select **Microsoft Graph**.  
-13. Select **Application permissions**.  
-14. Search for and add the following permissions:  
-    * Group.Read.All  
-    * GroupMember.Read.All  
-    * User.Read.All  
-15. Click the Grant admin consent for$$Your Organization$$  
-    button to approve the permissions.
+1. In the [Microsoft Entra admin center](https://entra.microsoft.com/), go to **Identity > Applications > App registrations** and click **New registration**.
+2. Name it (e.g. *CCaaS Sync Service*), choose **Accounts in this organizational directory only**, and click **Register**.
+3. Copy the **Application (client) ID** and **Directory (tenant) ID** for the configuration UI.
+4. Under **Certificates & secrets**, create a **New client secret** and copy its **Value** right away. It is shown only once.
+5. Under **API permissions**, add these **Microsoft Graph > Application permissions**:
+   - `Group.Read.All`
+   - `GroupMember.Read.All`
+   - `User.Read.All`
+6. Click **Grant admin consent** for your organization.

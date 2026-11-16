@@ -15,13 +15,24 @@
  */
 
 const { google } = require('googleapis');
-const { Client } = require('ldapts');
+const { Client, AndFilter, EqualityFilter } = require('ldapts');
 const fetch = require('node-fetch');
 const FormData = require('form-data');
 const msal = require('@azure/msal-node');
 const { Client: GraphClient } = require('@microsoft/microsoft-graph-client');
 require("isomorphic-fetch");
 const { validateCcaasHost, validateLdapUrl } = require('./config-security');
+const { buildDirectoryUsers, computeSyncPlan, assertPlanIsSafe } = require('./sync-plan');
+
+const CCAAS_PAGE_SIZE = 1000;
+const MAX_PAGES = 1000;
+
+class GroupNotFoundError extends Error {
+    constructor(directoryType, groupName) {
+        super(`Directory group "${groupName}" was not found in ${directoryType}. Sync aborted to avoid deactivating its members. Check the group mappings.`);
+        this.name = 'GroupNotFoundError';
+    }
+}
 
 
 // --- CCaaS API Functions ---
@@ -70,7 +81,7 @@ async function _callCcaasUploadApi(config, path, usersPayload) {
     const authHeader = 'Basic ' + Buffer.from(`${username}:${apiKey}`).toString('base64');
 
     const form = new FormData();
-    console.log("Bulk update request body (content of file):", JSON.stringify(usersPayload, null, 2));
+    console.log(`Uploading bulk user file with ${usersPayload.length} records.`);
     
     const payloadBuffer = Buffer.from(JSON.stringify(usersPayload), 'utf8');
     
@@ -136,6 +147,20 @@ async function getCcaasDetails(config) {
     return { teams, roles };
 }
 
+/** Fetches every CCaaS user, following pagination (`page` / `per`). */
+async function getAllCcaasUsers(config) {
+    const all = [];
+    for (let page = 1; page <= MAX_PAGES; page++) {
+        const batch = await _callCcaasApi(config, `/apps/api/v1/users?page=${page}&per=${CCAAS_PAGE_SIZE}`);
+        if (!Array.isArray(batch)) {
+            throw new Error('Unexpected response from CCaaS users API (expected an array).');
+        }
+        all.push(...batch);
+        if (batch.length < CCAAS_PAGE_SIZE) return all;
+    }
+    throw new Error(`CCaaS users API returned more than ${MAX_PAGES} pages; aborting.`);
+}
+
 // --- Directory User Fetching & Testing Logic ---
 
 // Microsoft Entra ID Helper Functions
@@ -163,6 +188,23 @@ async function getGraphClient(directoryConfig) {
     };
 
     return GraphClient.initWithMiddleware({ authProvider });
+}
+
+/** Runs a Graph request and follows @odata.nextLink to collect every page. */
+async function _graphGetAll(graphClient, request) {
+    const items = [];
+    let response = await request.get();
+    for (let page = 0; page < MAX_PAGES; page++) {
+        items.push(...(response.value || []));
+        const next = response['@odata.nextLink'];
+        if (!next) return items;
+        response = await graphClient.api(next).get();
+    }
+    throw new Error('Microsoft Graph returned too many pages; aborting.');
+}
+
+function _odataString(value) {
+    return String(value).replace(/'/g, "''");
 }
 
 async function testEntraIdConnection(directoryConfig) {
@@ -255,7 +297,8 @@ async function getActiveDirectoryGroups(directoryConfig) {
         const { searchEntries } = await client.search(directoryConfig.searchBase, {
             scope: 'sub',
             filter: '(objectClass=group)',
-            attributes: ['cn']
+            attributes: ['cn'],
+            paged: true,
         });
         return searchEntries.map(entry => entry.cn).sort();
     } catch (e) {
@@ -268,8 +311,8 @@ async function getActiveDirectoryGroups(directoryConfig) {
 
 async function getEntraIdGroups(directoryConfig) {
     const graphClient = await getGraphClient(directoryConfig);
-    const groups = await graphClient.api('/groups').select('displayName').get();
-    return groups.value.map(g => g.displayName).sort();
+    const groups = await _graphGetAll(graphClient, graphClient.api('/groups').select('displayName').top(999));
+    return groups.map(g => g.displayName).sort();
 }
 
 
@@ -287,43 +330,68 @@ async function getDirectoryGroups(config) {
 
 // --- Main Sync Logic ---
 
-async function getGoogleWorkspaceGroupMembers(groupName, directoryConfig) {
+function _googleAdmin(directoryConfig) {
     const auth = google.auth.fromJSON(JSON.parse(directoryConfig.gcpKey));
     auth.scopes = [
-        'https://www.googleapis.com/auth/admin.directory.group.member.readonly', 
+        'https://www.googleapis.com/auth/admin.directory.group.member.readonly',
         'https://www.googleapis.com/auth/admin.directory.group.readonly',
         'https://www.googleapis.com/auth/admin.directory.user.readonly'
     ];
     auth.subject = directoryConfig.adminEmail;
-    const admin = google.admin({ version: 'directory_v1', auth: auth });
+    return google.admin({ version: 'directory_v1', auth: auth });
+}
 
-    const groupsRes = await admin.groups.list({ customer: 'my_customer', query: `name='${groupName}'` });
-    if (!groupsRes.data.groups || groupsRes.data.groups.length === 0) {
-        console.warn(`Google Workspace group "${groupName}" not found.`);
-        return [];
+async function _mapWithConcurrency(items, limit, fn) {
+    const results = new Array(items.length);
+    let next = 0;
+    async function worker() {
+        while (next < items.length) {
+            const i = next++;
+            results[i] = await fn(items[i]);
+        }
     }
-    const groupKey = groupsRes.data.groups[0].id;
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+    return results;
+}
+
+async function getGoogleWorkspaceGroupMembers(groupName, directoryConfig, cache = {}) {
+    const admin = _googleAdmin(directoryConfig);
+
+    // Match the group by exact name from the full group list. This avoids
+    // building an Admin SDK query string from user-supplied text.
+    if (!cache.googleGroups) {
+        const groups = [];
+        let pageToken = null;
+        do {
+            const res = await admin.groups.list({ customer: 'my_customer', maxResults: 200, pageToken });
+            groups.push(...(res.data.groups || []));
+            pageToken = res.data.nextPageToken;
+        } while (pageToken);
+        cache.googleGroups = groups;
+    }
+    const group = cache.googleGroups.find(g => g.name === groupName);
+    if (!group) {
+        throw new GroupNotFoundError('Google Workspace', groupName);
+    }
 
     let allMembers = [];
     let pageToken = null;
     do {
         const res = await admin.members.list({
-            groupKey: groupKey,
+            groupKey: group.id,
             maxResults: 200,
             pageToken: pageToken,
         });
         if (res.data.members) {
-            const users = res.data.members.filter(m => m.type === 'USER');
-            allMembers = allMembers.concat(users);
+            allMembers = allMembers.concat(res.data.members.filter(m => m.type === 'USER'));
         }
         pageToken = res.data.nextPageToken;
     } while (pageToken);
 
-    const userDetailsPromises = allMembers.map(member => 
+    const userDetailsResponses = await _mapWithConcurrency(allMembers, 10, member =>
         admin.users.get({ userKey: member.id, fields: 'name,primaryEmail' })
     );
-    const userDetailsResponses = await Promise.all(userDetailsPromises);
-    
+
     return userDetailsResponses.map(res => ({
         email: res.data.primaryEmail,
         firstName: res.data.name?.givenName || '',
@@ -337,22 +405,29 @@ async function getActiveDirectoryGroupMembers(groupName, directoryConfig) {
     try {
         await client.bind(bindDN, bindPassword);
 
+        // Filter objects escape values (RFC 4515), so names like "Sales (EMEA)" work.
         const { searchEntries: groupEntries } = await client.search(searchBase, {
             scope: 'sub',
-            filter: `(&(objectClass=group)(cn=${groupName}))`,
+            filter: new AndFilter({ filters: [
+                new EqualityFilter({ attribute: 'objectClass', value: 'group' }),
+                new EqualityFilter({ attribute: 'cn', value: groupName }),
+            ] }),
             attributes: ['distinguishedName']
         });
 
         if (groupEntries.length === 0) {
-            console.warn(`Active Directory group "${groupName}" not found.`);
-            return [];
+            throw new GroupNotFoundError('Active Directory', groupName);
         }
         const groupDN = groupEntries[0].distinguishedName;
 
         const { searchEntries: userEntries } = await client.search(searchBase, {
             scope: 'sub',
-            filter: `(&(objectClass=user)(memberOf=${groupDN}))`,
-            attributes: ['mail', 'givenName', 'sn']
+            filter: new AndFilter({ filters: [
+                new EqualityFilter({ attribute: 'objectClass', value: 'user' }),
+                new EqualityFilter({ attribute: 'memberOf', value: groupDN }),
+            ] }),
+            attributes: ['mail', 'givenName', 'sn'],
+            paged: true,
         });
 
         return userEntries.filter(u => u.mail).map(u => ({ 
@@ -362,6 +437,7 @@ async function getActiveDirectoryGroupMembers(groupName, directoryConfig) {
         }));
 
     } catch (e) {
+        if (e instanceof GroupNotFoundError) throw e;
         console.error(`AD Get Group Members Error for "${groupName}":`, e);
         throw new Error(`Failed to get AD group members: ${e.message}`);
     } finally {
@@ -373,21 +449,21 @@ async function getEntraIdGroupMembers(groupName, directoryConfig) {
     const graphClient = await getGraphClient(directoryConfig);
     
     const groups = await graphClient.api('/groups')
-        .filter(`displayName eq '${groupName}'`)
+        .filter(`displayName eq '${_odataString(groupName)}'`)
         .select('id')
         .get();
 
     if (!groups.value || groups.value.length === 0) {
-        console.warn(`Entra ID group "${groupName}" not found.`);
-        return [];
+        throw new GroupNotFoundError('Microsoft Entra ID', groupName);
     }
-    const groupId = groups.value[0].id;
-    
-    const members = await graphClient.api(`/groups/${groupId}/members/microsoft.graph.user`)
-        .select('displayName,mail,givenName,surname,userPrincipalName')
-        .get();
-        
-    return members.value.map(user => {
+    const groupId = encodeURIComponent(groups.value[0].id);
+
+    const members = await _graphGetAll(graphClient,
+        graphClient.api(`/groups/${groupId}/members/microsoft.graph.user`)
+            .select('displayName,mail,givenName,surname,userPrincipalName')
+            .top(999));
+
+    return members.map(user => {
         const email = directoryConfig.entraIdEmailField === 'userPrincipalName' ? user.userPrincipalName : user.mail;
         return {
             email: email,
@@ -398,180 +474,101 @@ async function getEntraIdGroupMembers(groupName, directoryConfig) {
 }
 
 
-async function getDirectoryUsersByGroup(groupName, directoryConfig) {
+async function getDirectoryUsersByGroup(groupName, directoryConfig, cache = {}) {
     console.log(`Fetching users for group "${groupName}" from ${directoryConfig.type}...`);
     let users = [];
     if (directoryConfig.type === 'google') {
-        users = await getGoogleWorkspaceGroupMembers(groupName, directoryConfig);
+        users = await getGoogleWorkspaceGroupMembers(groupName, directoryConfig, cache);
     } else if (directoryConfig.type === 'ad') {
         users = await getActiveDirectoryGroupMembers(groupName, directoryConfig);
     } else if (directoryConfig.type === 'entra') {
         users = await getEntraIdGroupMembers(groupName, directoryConfig);
+    } else {
+        throw new Error(`Unsupported directory type: ${directoryConfig.type}`);
     }
     console.log(`Found ${users.length} users in group "${groupName}".`);
     return users;
 }
 
-async function runSync(config, simulate = false) {
+const PREVIEW_LIMIT = 200;
+
+function _preview(users) {
+    return users.slice(0, PREVIEW_LIMIT).map(u => u.email);
+}
+
+/**
+ * Runs a sync.
+ *
+ * @param {object} config  Hydrated config (with secrets).
+ * @param {object|boolean} [options]  `{simulate, allowLargeDeactivation}`. A boolean is treated as `simulate`.
+ * @param {object} [deps]  Test hooks, e.g. `{getDirectoryUsersByGroup}`.
+ */
+async function runSync(config, options = {}, deps = {}) {
+    const fetchGroupMembers = deps.getDirectoryUsersByGroup || getDirectoryUsersByGroup;
+    if (typeof options === 'boolean') options = { simulate: options };
+    const { simulate = false, allowLargeDeactivation = false } = options;
     console.log(`Starting synchronization process... (Simulate: ${simulate})`);
-    
+
     if (!config.syncRole) {
         throw new Error('User Sync Custom Role is not configured. Please select a role in the UI and save.');
     }
+    if (!Array.isArray(config.mappings) || config.mappings.length === 0) {
+        throw new Error('No group mappings are configured. Add at least one mapping and save.');
+    }
 
     const templateResponse = await _callCcaasApi(config, '/apps/api/v1/bulk/users/template');
-    if (!templateResponse || templateResponse.length === 0) {
+    if (!Array.isArray(templateResponse) || templateResponse.length === 0) {
         throw new Error('Failed to fetch user template from CCaaS.');
     }
-    const emptyUser = { ...templateResponse[0] };
-    emptyUser.roles = emptyUser.roles.map(role => ({ ...role, value: 0 }));
-    emptyUser.teams = emptyUser.teams.map(team => ({ ...team, value: 0 }));
+    const template = templateResponse[0];
 
-    const allCcaasUsers = await _callCcaasApi(config, '/apps/api/v1/users');
-    
-    const currentUserList = allCcaasUsers.filter(user => 
-        user.roles?.some(role => role.name === config.syncRole)
-    );
-    const currentUserMap = new Map(currentUserList.map(user => [user.email, user]));
-    console.log(`Found ${currentUserList.length} existing users managed by sync role "${config.syncRole}".`);
+    const ccaasUsers = await getAllCcaasUsers(config);
+    console.log(`Fetched ${ccaasUsers.length} CCaaS users.`);
 
-    const directoryUserList = new Map();
-    for (const mappingGroup of config.mappings) {
-        const members = await getDirectoryUsersByGroup(mappingGroup.group, config.directory);
-        for (const member of members) {
-            if (!directoryUserList.has(member.email)) {
-                directoryUserList.set(member.email, {
-                    email: member.email,
-                    firstName: member.firstName,
-                    lastName: member.lastName,
-                    teams: [],
-                    roles: []
-                });
-            }
-            const user = directoryUserList.get(member.email);
-            for(const rule of mappingGroup.rules) {
-                 if (rule.type.startsWith('team')) {
-                    user.teams.push(rule.value);
-                } else {
-                    user.roles.push(rule.value);
-                }
-            }
-        }
+    // Any directory error (including a missing group) aborts the whole sync
+    // before anything is submitted.
+    const cache = {};
+    const groupResults = [];
+    for (const mapping of config.mappings) {
+        const members = await fetchGroupMembers(mapping.group, config.directory, cache);
+        groupResults.push({ group: mapping.group, rules: mapping.rules, members });
     }
-    console.log(`Found ${directoryUserList.size} unique users in directory groups.`);
+    const { users: directoryUsers, warnings } = buildDirectoryUsers(groupResults);
+    console.log(`Found ${directoryUsers.size} unique users in directory groups.`);
 
-    const usersToAdd = [];
-    const usersToDelete = [];
-    const usersToUpdate = [];
+    const plan = computeSyncPlan({ directoryUsers, ccaasUsers, template, syncRole: config.syncRole });
+    const usersToAdd = plan.usersToAdd;
+    const usersToUpdate = plan.usersToUpdate;
+    const usersToDelete = plan.usersToDeactivate;
+    const counts = { add: usersToAdd.length, update: usersToUpdate.length, deactivate: usersToDelete.length };
+    console.log(`Sync plan: add=${counts.add} update=${counts.update} deactivate=${counts.deactivate} (managed active=${plan.managedActiveCount}).`);
 
-    for (const [email, dirUser] of directoryUserList.entries()) {
-        const currentUser = currentUserMap.get(email);
-        if (!currentUser || currentUser.deactivated_at !== null) {
-            const userToAdd = JSON.parse(JSON.stringify(emptyUser));
-            userToAdd.email = email;
-            userToAdd.new_email = "";
-            userToAdd.first_name = dirUser.firstName;
-            userToAdd.last_name = dirUser.lastName;
-            userToAdd.status = 'Active';
-            userToAdd.agent_number = '';
-            userToAdd.location = '';
-            userToAdd.alias = '';
-            
-            const syncRole = userToAdd.roles.find(r => r.name === config.syncRole);
-            if (syncRole) syncRole.value = 1;
-            
-            dirUser.roles.forEach(roleName => {
-                const role = userToAdd.roles.find(r => r.name === roleName);
-                if (role) role.value = 1;
-            });
-            if (dirUser.teams.length > 0) {
-                 const teamName = dirUser.teams[0];
-                 const team = userToAdd.teams.find(t => t.name === teamName);
-                 if (team) team.value = 1;
-            }
-            usersToAdd.push(userToAdd);
-        }
+    const preview = { add: _preview(usersToAdd), update: _preview(usersToUpdate), deactivate: _preview(usersToDelete) };
+    const safety = config.safety || {};
+
+    let blockedBy = null;
+    try {
+        assertPlanIsSafe(plan, directoryUsers.size, { maxDeactivations: safety.maxDeactivations, allowLargeDeactivation });
+    } catch (error) {
+        if (!simulate) throw error;
+        blockedBy = error.message;
     }
 
-    for (const [email, currentUser] of currentUserMap.entries()) {
-        if (currentUser.deactivated_at === null && !directoryUserList.has(email)) {
-            const userToDelete = JSON.parse(JSON.stringify(currentUser));
-            userToDelete.status = 'Inactive';
-            delete userToDelete.deactivated_at;
-            delete userToDelete.id;
-            delete userToDelete.phone_numbers;
-            delete userToDelete.extension_numbers;
-            usersToDelete.push(userToDelete);
-        }
-    }
-
-    for (const [email, dirUser] of directoryUserList.entries()) {
-        if (currentUserMap.has(email) && currentUserMap.get(email).deactivated_at === null) {
-            const currentUser = currentUserMap.get(email);
-            const userToUpdate = JSON.parse(JSON.stringify(currentUser));
-            
-            delete userToUpdate.deactivated_at;
-            delete userToUpdate.id;
-            if(userToUpdate.phone_numbers) delete userToUpdate.phone_numbers;
-            if(userToUpdate.extension_numbers) delete userToUpdate.extension_numbers;
-
-
-            const currentRoles = (currentUser.roles || []).filter(r => r.name !== config.syncRole).map(r => r.name).sort();
-            const targetRoles = dirUser.roles.sort();
-            const rolesChanged = JSON.stringify(currentRoles) !== JSON.stringify(targetRoles);
-
-            let currentTeam = '';
-            if (currentUser.teams && currentUser.teams.length > 0) {
-                 const activeTeam = currentUser.teams.find(t => t.value === 1 || typeof t.value === 'undefined');
-                 if(activeTeam) {
-                    currentTeam = activeTeam.name;
-                 }
-            }
-            const targetTeam = dirUser.teams[0] || '';
-            const teamChanged = currentTeam !== targetTeam;
-
-            if (rolesChanged || teamChanged) {
-                userToUpdate.roles = emptyUser.roles.map(r => ({ ...r, value: 0 }));
-                userToUpdate.teams = emptyUser.teams.map(t => ({ ...t, value: 0 }));
-
-                const syncRole = userToUpdate.roles.find(r => r.name === config.syncRole);
-                if (syncRole) syncRole.value = 1;
-                
-                targetRoles.forEach(roleName => {
-                    const role = userToUpdate.roles.find(r => r.name === roleName);
-                    if(role) role.value = 1;
-                });
-                if(targetTeam) {
-                    const team = userToUpdate.teams.find(t => t.name === targetTeam);
-                    if(team) team.value = 1;
-                }
-                usersToUpdate.push(userToUpdate);
-            }
-        }
-    }
-
-    const combinedPayload = [...usersToAdd, ...usersToDelete, ...usersToUpdate].map(user => {
-        if (user.hasOwnProperty('max_chat_limit_enabled')) {
-            user.max_chat_limit_enabled = user.max_chat_limit_enabled ? 1 : 0;
-        }
-        return user;
-    });
-    
+    const combinedPayload = [...usersToAdd, ...usersToDelete, ...usersToUpdate];
     let jobId = null;
-    let message = `Sync complete. Users to add: ${usersToAdd.length}, to update: ${usersToUpdate.length}, to deactivate: ${usersToDelete.length}. No changes to submit.`;
+    let message = `Sync complete. Users to add: ${counts.add}, to update: ${counts.update}, to deactivate: ${counts.deactivate}. No changes to submit.`;
 
     if (combinedPayload.length > 0) {
         if (simulate) {
-            console.log("--- SIMULATION ONLY ---");
-            console.log("Simulated Payload:", JSON.stringify(combinedPayload, null, 2));
-            message = `Simulation complete. Users to add: ${usersToAdd.length}, to update: ${usersToUpdate.length}, to deactivate: ${usersToDelete.length}.`;
+            message = `Simulation complete. Users to add: ${counts.add}, to update: ${counts.update}, to deactivate: ${counts.deactivate}.`;
+            if (blockedBy) message += ` WARNING: a live sync would be blocked: ${blockedBy}`;
         } else {
             console.log("Submitting combined payload to CCaaS bulk upload...");
             const uploadResponse = await _callCcaasUploadApi(config, '/apps/api/v1/bulk/users/upload', combinedPayload);
             jobId = uploadResponse.id;
             console.log(`Successfully submitted job with ID: ${jobId}`);
             
-            const initialDelay = (config.schedule.initialPollDelay || 15) * 1000;
+            const initialDelay = Math.min(Math.max(Number(config.schedule?.initialPollDelay) || 15, 5), 60) * 1000;
             console.log(`Waiting ${initialDelay / 1000} seconds before polling...`);
             await new Promise(resolve => setTimeout(resolve, initialDelay));
 
@@ -634,8 +631,8 @@ async function runSync(config, simulate = false) {
     } else {
         console.log("No users to add or update.");
     }
-    
-    return { message };
+
+    return { message, simulate, counts, preview, warnings, blockedBy, jobId };
 }
 
 
@@ -649,6 +646,10 @@ module.exports = {
     testEntraIdConnection, 
     getDirectoryGroups,
     proceedCcaasJob,
-    getCcaasSchemeErrors
+    getCcaasSchemeErrors,
+    getAllCcaasUsers,
+    GroupNotFoundError,
+    // Exposed for tests.
+    _graphGetAll,
 };
 

@@ -43,9 +43,13 @@ steps:
       - '--no-allow-unauthenticated'
       - '--ingress'
       - 'internal-and-cloud-load-balancing'
+      # A live sync polls the CCaaS bulk job for several minutes; keep this in
+      # line with SCHEDULER_ATTEMPT_DEADLINE_SECONDS in index.js.
+      - '--timeout'
+      - '900'
       # Use --update-env-vars (not --set-env-vars) so redeploys keep IAP_AUDIENCE.
       - '--update-env-vars'
-      - 'SERVICE_ACCOUNT=${_SERVICE_ACCOUNT}'
+      - 'SERVICE_ACCOUNT=${_SERVICE_ACCOUNT},REGION=${_REGION}'
 
   # Get the URL of the deployed service and update it with the SERVICE_URL env var
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -57,7 +61,7 @@ steps:
       gcloud run services update ${_SERVICE_NAME} \
         --platform managed \
         --region ${_REGION} \
-        --update-env-vars=SERVICE_ACCOUNT=${_SERVICE_ACCOUNT},SERVICE_URL=$$SERVICE_URL
+        --update-env-vars=SERVICE_ACCOUNT=${_SERVICE_ACCOUNT},REGION=${_REGION},SERVICE_URL=$$SERVICE_URL
     waitFor: ['deploy']
 
 images:

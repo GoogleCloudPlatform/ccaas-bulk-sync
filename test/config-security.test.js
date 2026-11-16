@@ -21,6 +21,7 @@ const {
     ConfigValidationError,
     validateCcaasHost,
     validateLdapUrl,
+    validateSafety,
 } = require('../config-security');
 
 const STORED = {
@@ -119,4 +120,18 @@ test('validateCcaasHost honors ALLOWED_CCAAS_HOST_SUFFIXES', () => {
     } finally {
         delete process.env.ALLOWED_CCAAS_HOST_SUFFIXES;
     }
+});
+
+test('validateSafety', () => {
+    assert.deepStrictEqual(validateSafety({ maxDeactivations: 0 }), { maxDeactivations: 0 });
+    assert.deepStrictEqual(validateSafety({ maxDeactivations: 25, extra: 'x' }), { maxDeactivations: 25 });
+    for (const bad of [{ maxDeactivations: -1 }, { maxDeactivations: 1.5 }, { maxDeactivations: '10' }, {}, null, []]) {
+        assert.throws(() => validateSafety(bad), ConfigValidationError, JSON.stringify(bad));
+    }
+});
+
+test('buildConfigToSave stores validated safety settings', () => {
+    const { configToSave } = buildConfigToSave(STORED, { ...incomingFrom(STORED), safety: { maxDeactivations: 7 } });
+    assert.deepStrictEqual(configToSave.safety, { maxDeactivations: 7 });
+    assert.throws(() => buildConfigToSave(STORED, { ...incomingFrom(STORED), safety: { maxDeactivations: '' } }), ConfigValidationError);
 });
