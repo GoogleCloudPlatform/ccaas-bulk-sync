@@ -52,7 +52,7 @@ function buildDirectoryUsers(groupResults) {
                     email: member.email.trim(),
                     firstName: member.firstName || '',
                     lastName: member.lastName || '',
-                    teams: [],
+                    teams: new Set(),
                     roles: new Set(),
                     groups: [],
                 });
@@ -62,18 +62,15 @@ function buildDirectoryUsers(groupResults) {
             for (const rule of rules || []) {
                 if (!rule || !rule.value) continue;
                 if (String(rule.type || '').startsWith('team')) {
-                    if (!user.teams.includes(rule.value)) user.teams.push(rule.value);
+                    user.teams.add(rule.value);
                 } else {
                     user.roles.add(rule.value);
                 }
             }
         }
     }
-    for (const [, user] of users) {
-        if (user.teams.length > 1) {
-            warnings.push(`${user.email} matches multiple teams (${user.teams.join(', ')}); only "${user.teams[0]}" is applied.`);
-        }
-    }
+    // Roles and teams accumulate: a user gets every role and joins every team
+    // from every mapping whose group they are in.
     return { users, warnings };
 }
 
@@ -89,84 +86,143 @@ function _stripReadOnlyFields(user) {
     return user;
 }
 
-function _applyAssignments(user, template, syncRole, roles, team) {
+function _isOn(entry) {
+    return entry.value === undefined || entry.value === 1 || entry.value === true;
+}
+
+function _applyAssignments(user, template, syncRole, roles, teams) {
     user.roles = template.roles.map(r => ({ ...r, value: 0 }));
     user.teams = template.teams.map(t => ({ ...t, value: 0 }));
-    const wanted = new Set([syncRole, ...roles]);
+    const wantedRoles = new Set([syncRole, ...roles]);
+    const wantedTeams = new Set(teams);
     for (const role of user.roles) {
-        if (wanted.has(role.name)) role.value = 1;
+        if (wantedRoles.has(role.name)) role.value = 1;
     }
-    if (team) {
-        const t = user.teams.find(x => x.name === team);
-        if (t) t.value = 1;
+    for (const team of user.teams) {
+        if (wantedTeams.has(team.name)) team.value = 1;
     }
     return user;
 }
 
 function _currentAssignments(ccaasUser, syncRole) {
-    const roles = [...new Set((ccaasUser.roles || [])
-        .filter(r => r.name !== syncRole && (r.value === undefined || r.value === 1 || r.value === true))
-        .map(r => r.name))].sort();
-    const activeTeam = (ccaasUser.teams || []).find(t => t.value === undefined || t.value === 1 || t.value === true);
-    return { roles, team: activeTeam ? activeTeam.name : '' };
+    const roles = [...new Set((ccaasUser.roles || []).filter(r => r.name !== syncRole && _isOn(r)).map(r => r.name))].sort();
+    const teams = [...new Set((ccaasUser.teams || []).filter(_isOn).map(t => t.name))].sort();
+    return { roles, teams };
 }
+
+function _norm(s) {
+    return typeof s === 'string' ? s.trim() : '';
+}
+
+/** Name fields to update; an empty directory value never blanks a CCaaS name. */
+function _nameChanges(current, dirUser) {
+    const changes = {};
+    const first = _norm(dirUser.firstName);
+    const last = _norm(dirUser.lastName);
+    if (first && first !== _norm(current.first_name)) changes.first_name = first;
+    if (last && last !== _norm(current.last_name)) changes.last_name = last;
+    return changes;
+}
+
+const DEFAULT_SYNC_OPTIONS = { existingUsers: 'skip', syncNames: true };
 
 /**
  * Works out the sync plan.
+ *
+ * Roles and teams accumulate across all mappings a user matches. Users who
+ * exist in CCaaS but aren't managed by this tool (no sync role) are skipped
+ * and reported by default; with existingUsers = 'adopt' they get the sync
+ * role and become managed (their roles and teams are then set from the
+ * mappings).
  *
  * @param {object} params
  * @param {Map<string, object>} params.directoryUsers  From buildDirectoryUsers().
  * @param {Array<object>} params.ccaasUsers  All CCaaS users (every page).
  * @param {object} params.template  First entry of the CCaaS bulk user template.
  * @param {string} params.syncRole  The role that marks users managed by this tool.
- * @return {{usersToAdd: object[], usersToUpdate: object[], usersToDeactivate: object[], managedActiveCount: number}}
+ * @param {{existingUsers?: 'skip'|'adopt', syncNames?: boolean}} [params.options]
  */
-function computeSyncPlan({ directoryUsers, ccaasUsers, template, syncRole }) {
+function computeSyncPlan({ directoryUsers, ccaasUsers, template, syncRole, options = {} }) {
     if (!template || !Array.isArray(template.roles) || !Array.isArray(template.teams)) {
         throw new Error('Invalid CCaaS user template.');
     }
-    const managed = new Map();
+    const opts = { ...DEFAULT_SYNC_OPTIONS, ...options };
+    const isManaged = (u) => (u.roles || []).some(r => r.name === syncRole);
+
+    // Index every CCaaS user by email; prefer an active, managed record if there are duplicates.
+    const byEmail = new Map();
+    const rank = (u) => (isManaged(u) ? 2 : 0) + (_isActive(u) ? 1 : 0);
     for (const u of ccaasUsers) {
-        if ((u.roles || []).some(r => r.name === syncRole)) {
-            managed.set(normalizeEmail(u.email), u);
-        }
+        const key = normalizeEmail(u.email);
+        if (!key) continue;
+        const existing = byEmail.get(key);
+        if (!existing || rank(u) > rank(existing)) byEmail.set(key, u);
     }
 
     const usersToAdd = [];
     const usersToUpdate = [];
     const usersToDeactivate = [];
+    const usersSkipped = [];
+    let adoptedCount = 0;
+
+    const newUser = (dirUser, roles, teams) => {
+        const user = JSON.parse(JSON.stringify(template));
+        user.email = dirUser.email;
+        user.new_email = '';
+        user.first_name = dirUser.firstName;
+        user.last_name = dirUser.lastName;
+        user.status = 'Active';
+        user.agent_number = '';
+        user.location = '';
+        user.alias = '';
+        return _applyAssignments(user, template, syncRole, roles, teams);
+    };
 
     for (const [key, dirUser] of directoryUsers) {
         const roles = [...dirUser.roles].sort();
-        const team = dirUser.teams[0] || '';
-        const current = managed.get(key);
+        const teams = [...dirUser.teams].sort();
+        const current = byEmail.get(key);
 
-        if (!current || !_isActive(current)) {
-            const user = JSON.parse(JSON.stringify(template));
-            user.email = dirUser.email;
-            user.new_email = '';
-            user.first_name = dirUser.firstName;
-            user.last_name = dirUser.lastName;
-            user.status = 'Active';
-            user.agent_number = '';
-            user.location = '';
-            user.alias = '';
-            usersToAdd.push(_applyAssignments(user, template, syncRole, roles, team));
+        if (!current) {
+            usersToAdd.push(newUser(dirUser, roles, teams));
+            continue;
+        }
+
+        if (!isManaged(current)) {
+            if (opts.existingUsers !== 'adopt') {
+                usersSkipped.push({ email: current.email, reason: _isActive(current) ? 'exists_unmanaged' : 'exists_unmanaged_inactive' });
+                continue;
+            }
+            adoptedCount++;
+            if (!_isActive(current)) {
+                usersToAdd.push(newUser(dirUser, roles, teams));
+                continue;
+            }
+            const user = _stripReadOnlyFields(JSON.parse(JSON.stringify(current)));
+            Object.assign(user, opts.syncNames ? _nameChanges(current, dirUser) : {});
+            usersToUpdate.push(_applyAssignments(user, template, syncRole, roles, teams));
+            continue;
+        }
+
+        if (!_isActive(current)) {
+            usersToAdd.push(newUser(dirUser, roles, teams));
             continue;
         }
 
         const now = _currentAssignments(current, syncRole);
         const rolesChanged = JSON.stringify(now.roles) !== JSON.stringify(roles);
-        const teamChanged = now.team !== team;
-        if (rolesChanged || teamChanged) {
+        const teamsChanged = JSON.stringify(now.teams) !== JSON.stringify(teams);
+        const names = opts.syncNames ? _nameChanges(current, dirUser) : {};
+        if (rolesChanged || teamsChanged || Object.keys(names).length > 0) {
             const user = _stripReadOnlyFields(JSON.parse(JSON.stringify(current)));
-            usersToUpdate.push(_applyAssignments(user, template, syncRole, roles, team));
+            Object.assign(user, names);
+            usersToUpdate.push(_applyAssignments(user, template, syncRole, roles, teams));
         }
     }
 
     let managedActiveCount = 0;
-    for (const [key, current] of managed) {
-        if (!_isActive(current)) continue;
+    for (const [key, current] of byEmail) {
+        if (!isManaged(current) || !_isActive(current)) continue;
         managedActiveCount++;
         if (!directoryUsers.has(key)) {
             const user = _stripReadOnlyFields(JSON.parse(JSON.stringify(current)));
@@ -181,7 +237,7 @@ function computeSyncPlan({ directoryUsers, ccaasUsers, template, syncRole }) {
         }
     }
 
-    return { usersToAdd, usersToUpdate, usersToDeactivate, managedActiveCount };
+    return { usersToAdd, usersToUpdate, usersToDeactivate, usersSkipped, adoptedCount, managedActiveCount };
 }
 
 /**
@@ -212,6 +268,7 @@ function assertPlanIsSafe(plan, directoryUserCount, { maxDeactivations, allowLar
 
 module.exports = {
     DEFAULT_MAX_DEACTIVATIONS,
+    DEFAULT_SYNC_OPTIONS,
     SyncSafetyError,
     normalizeEmail,
     buildDirectoryUsers,

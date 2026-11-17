@@ -26,6 +26,7 @@ createApp({
                 initialPollDelay: 15
             },
             safety: { maxDeactivations: 25 },
+            syncOptions: { existingUsers: 'skip', syncNames: true },
             syncRole: ''
         });
         const ccaasDetails = ref({ teams: [], roles: [] });

@@ -111,11 +111,54 @@ test('previously deactivated managed user who is back in the directory is re-add
     assert.strictEqual(plan.usersToAdd.length, 1);
 });
 
-test('multiple teams produce a warning and the first team is used', () => {
-    const { users, warnings } = dir([['g1', [{ type: 'team', value: 'Sales' }], ['a@x.com']], ['g2', [{ type: 'team', value: 'Support' }], ['a@x.com']]]);
-    assert.strictEqual(warnings.length, 1);
+test('roles and teams accumulate across all mappings a user matches', () => {
+    const { users, warnings } = dir([
+        ['g1', [{ type: 'team', value: 'Sales' }, { type: 'role', value: 'Agent' }], ['a@x.com']],
+        ['g2', [{ type: 'team', value: 'Support' }, { type: 'role', value: 'Supervisor' }], ['a@x.com']],
+    ]);
+    assert.deepStrictEqual(warnings, []);
     const plan = computeSyncPlan({ directoryUsers: users, ccaasUsers: [], template: TEMPLATE, syncRole: SYNC_ROLE });
-    assert.deepStrictEqual(plan.usersToAdd[0].teams.filter(t => t.value === 1).map(t => t.name), ['Sales']);
+    const u = plan.usersToAdd[0];
+    assert.deepStrictEqual(u.teams.filter(t => t.value === 1).map(t => t.name).sort(), ['Sales', 'Support']);
+    assert.deepStrictEqual(u.roles.filter(r => r.value === 1).map(r => r.name).sort(), ['Agent', 'Supervisor', SYNC_ROLE]);
+});
+
+test('team set changes are detected; unchanged team sets do not update', () => {
+    const both = dir([['g1', AGENT_SALES, ['a@x.com']], ['g2', [{ type: 'team', value: 'Support' }], ['a@x.com']]]);
+    const inSales = ccaasUser('a@x.com', { team: 'Sales' });
+    assert.strictEqual(computeSyncPlan({ directoryUsers: both.users, ccaasUsers: [inSales], template: TEMPLATE, syncRole: SYNC_ROLE }).usersToUpdate.length, 1, 'adds Support');
+    const inBoth = { ...inSales, teams: [{ name: 'Support' }, { name: 'Sales' }] };
+    assert.strictEqual(computeSyncPlan({ directoryUsers: both.users, ccaasUsers: [inBoth], template: TEMPLATE, syncRole: SYNC_ROLE }).usersToUpdate.length, 0);
+});
+
+test('existing unmanaged CCaaS users are skipped and reported by default', () => {
+    const { users } = dir([['g', AGENT_SALES, ['Manual@x.com', 'new@x.com']]]);
+    const plan = computeSyncPlan({ directoryUsers: users, ccaasUsers: [ccaasUser('manual@x.com', { synced: false, roles: ['Supervisor'] })], template: TEMPLATE, syncRole: SYNC_ROLE });
+    assert.deepStrictEqual(plan.usersSkipped, [{ email: 'manual@x.com', reason: 'exists_unmanaged' }]);
+    assert.deepStrictEqual(plan.usersToAdd.map(u => u.email), ['new@x.com']);
+    assert.strictEqual(plan.usersToUpdate.length, 0);
+});
+
+test('existingUsers=adopt gives existing users the sync role and mapped roles/teams', () => {
+    const { users } = dir([['g', AGENT_SALES, ['manual@x.com']]]);
+    const plan = computeSyncPlan({ directoryUsers: users, ccaasUsers: [ccaasUser('manual@x.com', { synced: false, roles: ['Supervisor'], team: 'Support' })], template: TEMPLATE, syncRole: SYNC_ROLE, options: { existingUsers: 'adopt' } });
+    assert.strictEqual(plan.adoptedCount, 1);
+    assert.strictEqual(plan.usersToUpdate.length, 1);
+    const u = plan.usersToUpdate[0];
+    assert.deepStrictEqual(u.roles.filter(r => r.value === 1).map(r => r.name).sort(), ['Agent', SYNC_ROLE]);
+    assert.deepStrictEqual(u.teams.filter(t => t.value === 1).map(t => t.name), ['Sales']);
+    assert.strictEqual(u.id, undefined);
+});
+
+test('name changes are synced (never blanked), and can be turned off', () => {
+    const users = new Map([['a@x.com', { email: 'a@x.com', firstName: 'Alicia', lastName: '', teams: new Set(['Sales']), roles: new Set(['Agent']), groups: ['g'] }]]);
+    const current = { ...ccaasUser('a@x.com'), first_name: 'Alice', last_name: 'Smith' };
+    const plan = computeSyncPlan({ directoryUsers: users, ccaasUsers: [current], template: TEMPLATE, syncRole: SYNC_ROLE });
+    assert.strictEqual(plan.usersToUpdate.length, 1);
+    assert.strictEqual(plan.usersToUpdate[0].first_name, 'Alicia');
+    assert.strictEqual(plan.usersToUpdate[0].last_name, 'Smith', 'empty directory last name keeps the CCaaS value');
+    const off = computeSyncPlan({ directoryUsers: users, ccaasUsers: [current], template: TEMPLATE, syncRole: SYNC_ROLE, options: { syncNames: false } });
+    assert.strictEqual(off.usersToUpdate.length, 0);
 });
 
 test('safety: empty directory with managed users is always blocked', () => {

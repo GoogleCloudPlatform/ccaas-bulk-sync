@@ -152,6 +152,17 @@
                     <input type="number" min="0" step="1" v-model.number="config.safety.maxDeactivations" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm">
                     <p class="mt-1 text-xs text-gray-500">Safety limit. A sync that would deactivate more users than this is blocked (scheduled runs always; manual runs ask for confirmation). Use 0 to block all deactivations.</p>
                 </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-600 mb-1">Existing CCaaS Users</label>
+                    <select v-model="config.syncOptions.existingUsers" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm">
+                        <option value="skip">Skip and report (default)</option>
+                        <option value="adopt">Adopt (add the sync role and manage them)</option>
+                    </select>
+                    <p class="mt-1 text-xs text-gray-500">For directory users who already exist in CCaaS without the sync role. Adopting replaces their roles and teams with the mapped ones.</p>
+                </div>
+                <div>
+                    <label class="flex items-center gap-2 text-sm font-medium text-gray-600"><input type="checkbox" v-model="config.syncOptions.syncNames"> Sync first and last names from the directory</label>
+                </div>
             </div>
         </div>
 
@@ -467,10 +478,10 @@
                         </ul>
                     </div>
                     <div v-if="syncResultModal.preview" class="mt-4 space-y-2 text-sm">
-                        <details v-for="kind in ['add', 'update', 'deactivate']" :key="kind" class="border rounded p-2">
-                            <summary class="cursor-pointer font-semibold capitalize">{{ kind }} ({{ syncResultModal.preview[kind].length }}<span v-if="syncResultModal.preview[kind].length >= 200">+</span>)</summary>
+                        <details v-for="kind in ['add', 'update', 'deactivate', 'skipped']" v-show="syncResultModal.preview[kind]" :key="kind" class="border rounded p-2">
+                            <summary class="cursor-pointer font-semibold capitalize">{{ kind }} ({{ (syncResultModal.preview[kind] || []).length }}<span v-if="(syncResultModal.preview[kind] || []).length >= 200">+</span>)</summary>
                             <ul class="mt-2 ml-4 font-mono text-xs text-gray-700">
-                                <li v-for="email in syncResultModal.preview[kind]" :key="email">{{ email }}</li>
+                                <li v-for="email in (syncResultModal.preview[kind] || [])" :key="email">{{ email }}</li>
                             </ul>
                         </details>
                     </div>

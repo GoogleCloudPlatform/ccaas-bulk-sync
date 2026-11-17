@@ -184,6 +184,22 @@ function validateGoogleAuthMode(value) {
     return mode;
 }
 
+/** Validates sync behavior options. */
+function validateSyncOptions(options) {
+    if (!options || typeof options !== 'object' || Array.isArray(options)) {
+        throw new ConfigValidationError('Sync options must be an object.');
+    }
+    const existingUsers = options.existingUsers ?? 'skip';
+    if (existingUsers !== 'skip' && existingUsers !== 'adopt') {
+        throw new ConfigValidationError('Existing CCaaS users must be "skip" or "adopt".');
+    }
+    const syncNames = options.syncNames ?? true;
+    if (typeof syncNames !== 'boolean') {
+        throw new ConfigValidationError('Sync names must be true or false.');
+    }
+    return { existingUsers, syncNames };
+}
+
 /** Validates the sync safety settings. */
 function validateSafety(safety) {
     if (!safety || typeof safety !== 'object' || Array.isArray(safety)) {
@@ -297,6 +313,9 @@ function buildConfigToSave(current, incoming) {
     if (incoming.safety !== undefined) {
         configToSave.safety = validateSafety(incoming.safety);
     }
+    if (incoming.syncOptions !== undefined) {
+        configToSave.syncOptions = validateSyncOptions(incoming.syncOptions);
+    }
 
     return { configToSave, secretsToSet };
 }
@@ -309,6 +328,7 @@ module.exports = {
     validateTenantId,
     validateClientId,
     validateSafety,
+    validateSyncOptions,
     validateGoogleAuthMode,
     redactConfig,
     extractLegacyPlaintextSecrets,

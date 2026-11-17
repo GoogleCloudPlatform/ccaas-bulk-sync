@@ -22,6 +22,7 @@ const {
     validateCcaasHost,
     validateLdapUrl,
     validateSafety,
+    validateSyncOptions,
 } = require('../config-security');
 
 const STORED = {
@@ -178,4 +179,11 @@ test('googleAuthMode: existing key-based configs stay on the key; new configs de
     assert.strictEqual(buildConfigToSave(fresh, incomingFrom(fresh)).configToSave.directory.googleAuthMode, 'keyless');
     assert.strictEqual(buildConfigToSave(keyCfg, { ...inc, directory: { ...inc.directory, googleAuthMode: 'keyless' } }).configToSave.directory.googleAuthMode, 'keyless');
     assert.throws(() => buildConfigToSave(keyCfg, { ...inc, directory: { ...inc.directory, googleAuthMode: 'oauth' } }), ConfigValidationError);
+});
+
+test('validateSyncOptions: defaults and validation', () => {
+    assert.deepStrictEqual(validateSyncOptions({}), { existingUsers: 'skip', syncNames: true });
+    assert.deepStrictEqual(validateSyncOptions({ existingUsers: 'adopt', syncNames: false }), { existingUsers: 'adopt', syncNames: false });
+    assert.throws(() => validateSyncOptions({ existingUsers: 'merge' }), ConfigValidationError);
+    assert.throws(() => validateSyncOptions({ syncNames: 'yes' }), ConfigValidationError);
 });

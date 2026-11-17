@@ -168,7 +168,7 @@ test('runSync (simulate) reports what would be blocked and returns a preview', a
     stubCcaas({ users: USERS_30 });
     const deps = { getDirectoryUsersByGroup: async () => [{ email: 'U0@X.com' }, { email: 'new@x.com' }] };
     const result = await syncLogic.runSync({ ...BASE, safety: { maxDeactivations: 5 } }, { simulate: true }, deps);
-    assert.deepStrictEqual(result.counts, { add: 1, update: 0, deactivate: 29 });
+    assert.deepStrictEqual(result.counts, { add: 1, update: 0, deactivate: 29, skipped: 0 });
     assert.match(result.blockedBy, /exceeds the safety limit of 5/);
     assert.deepStrictEqual(result.preview.add, ['new@x.com']);
 });
