@@ -21,6 +21,27 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_SERVICE_NAME}']
 
+  # Deploy (or update) the Cloud Run Job that performs live syncs, and let the
+  # service account start it with per-run settings.
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'deploy-job'
+    entrypoint: 'bash'
+    args:
+    - '-c'
+    - |
+      set -e
+      gcloud run jobs deploy ${_SERVICE_NAME}-sync \
+        --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_SERVICE_NAME} \
+        --region=${_REGION} \
+        --service-account=${_SERVICE_ACCOUNT} \
+        --command=node --args=job.js \
+        --tasks=1 --max-retries=0 --task-timeout=3600 \
+        --set-env-vars=SERVICE_ACCOUNT=${_SERVICE_ACCOUNT},REGION=${_REGION}
+      gcloud run jobs add-iam-policy-binding ${_SERVICE_NAME}-sync \
+        --region=${_REGION} \
+        --member=serviceAccount:${_SERVICE_ACCOUNT} \
+        --role=roles/run.jobsExecutorWithOverrides >/dev/null
+
   # Deploy container image to Cloud Run for the first time
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: 'deploy'
@@ -46,13 +67,14 @@ steps:
       - '--no-allow-unauthenticated'
       - '--ingress'
       - '${_INGRESS}'
-      # A live sync polls the CCaaS bulk job for several minutes; keep this in
-      # line with SCHEDULER_ATTEMPT_DEADLINE_SECONDS in index.js.
+      # Live syncs run in the Cloud Run Job; this covers simulations and inline
+      # syncs. Keep in line with SCHEDULER_ATTEMPT_DEADLINE_SECONDS in index.js.
       - '--timeout'
       - '900'
       # Use --update-env-vars (not --set-env-vars) so redeploys keep IAP_AUDIENCE.
       - '--update-env-vars'
-      - 'SERVICE_ACCOUNT=${_SERVICE_ACCOUNT},REGION=${_REGION}'
+      - 'SERVICE_ACCOUNT=${_SERVICE_ACCOUNT},REGION=${_REGION},SYNC_JOB_NAME=${_SERVICE_NAME}-sync'
+    waitFor: ['deploy-job']
 
   # Get the URL of the deployed service and update it with the SERVICE_URL env var
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'

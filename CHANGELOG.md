@@ -7,6 +7,12 @@
 - **Name sync:** first and last names are compared and updated from the directory (setting **Sync names**, on by default). An empty directory value never blanks a CCaaS name.
 - Simulations and run history report a `skipped` count; the simulation preview lists skipped users.
 
+### Changed (architecture)
+- **Live syncs run in a Cloud Run Job** (`<service>-sync`, one task, no retries, 1-hour timeout). `POST /api/sync` starts it and returns `202` with a run ID; the UI follows the run through the new `GET /api/sync-runs/:id`. This fixes live syncs started from the UI failing with "Failed to fetch" when they took longer than the roughly 30-second request limit through IAP. Simulations still run inline. If `SYNC_JOB_NAME` isn't set, live syncs run inline as before.
+- Run history records a run as `queued` → `running` → final outcome. The job holds the sync lock for the whole run.
+- Alert filters (script and Terraform) include the job's logs; `setup-alerts.sh` now updates existing policies and the metric in place.
+- Load balancer backend timeout raised to 300s (README and Terraform).
+
 **Upgrade impact:** expect one-off updates on the first sync for users who match several team mappings, and for users whose names differ. Run **Simulate Only** first.
 
 ## 1.4.0: Operations

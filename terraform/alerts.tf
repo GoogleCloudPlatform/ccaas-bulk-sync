@@ -16,7 +16,7 @@
 
 locals {
   alerts      = var.notify_email != ""
-  base_filter = "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${var.service_name}\" AND jsonPayload.event=\"sync_run\" AND jsonPayload.simulate=false"
+  base_filter = "((resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${var.service_name}\") OR (resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"${var.service_name}-sync\")) AND jsonPayload.event=\"sync_run\" AND jsonPayload.simulate=false"
   fail_filter = "${local.base_filter} AND jsonPayload.outcome=(\"error\" OR \"blocked\" OR \"group_not_found\" OR \"job_failed\" OR \"job_timeout\")"
   ok_filter   = "${local.base_filter} AND jsonPayload.trigger=\"scheduled\" AND jsonPayload.outcome=(\"no_changes\" OR \"job_finished\")"
   alert_doc   = "CCaaS Bulk Sync: open the UI and check **Recent Sync Runs**, or run `gcloud logging read 'jsonPayload.event=\"sync_run\"' --project=${var.project_id} --limit=5`."
@@ -78,7 +78,7 @@ resource "google_monitoring_alert_policy" "no_success" {
   conditions {
     display_name = "No successful scheduled sync for ${var.no_success_hours}h"
     condition_absent {
-      filter   = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.successful_runs[0].name}\" AND resource.type=\"cloud_run_revision\""
+      filter   = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.successful_runs[0].name}\" AND resource.type=one_of(\"cloud_run_revision\",\"cloud_run_job\")"
       duration = "${var.no_success_hours * 3600}s"
       aggregations {
         alignment_period   = "3600s"

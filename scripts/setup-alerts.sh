@@ -21,7 +21,7 @@
 #
 # Usage: PROJECT_ID=... SERVICE_NAME=ccaas-sync-service NOTIFY_EMAIL=ops@example.com \
 #          [NO_SUCCESS_HOURS=3] ./scripts/setup-alerts.sh
-# Safe to re-run: existing metrics, channels and policies with the same name are reused.
+# Safe to re-run: the channel is reused, and the metric and policies are updated in place.
 set -euo pipefail
 
 : "${PROJECT_ID:?Set PROJECT_ID}"
@@ -30,7 +30,8 @@ SERVICE_NAME="${SERVICE_NAME:-ccaas-sync-service}"
 NO_SUCCESS_HOURS="${NO_SUCCESS_HOURS:-3}"
 G=(gcloud --project="$PROJECT_ID" --quiet)
 
-BASE_FILTER="resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${SERVICE_NAME}\" AND jsonPayload.event=\"sync_run\""
+# Live syncs log from the Cloud Run Job (<service>-sync); simulations and inline syncs from the service.
+BASE_FILTER="((resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${SERVICE_NAME}\") OR (resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"${SERVICE_NAME}-sync\")) AND jsonPayload.event=\"sync_run\""
 FAIL_FILTER="${BASE_FILTER} AND jsonPayload.simulate=false AND jsonPayload.outcome=(\"error\" OR \"blocked\" OR \"group_not_found\" OR \"job_failed\" OR \"job_timeout\")"
 SUCCESS_FILTER="${BASE_FILTER} AND jsonPayload.simulate=false AND jsonPayload.trigger=\"scheduled\" AND jsonPayload.outcome=(\"no_changes\" OR \"job_finished\")"
 SUCCESS_METRIC="ccaas_sync_successful_scheduled_runs"
@@ -44,18 +45,22 @@ fi
 echo "  ${CHANNEL}"
 
 echo "Log-based metric ${SUCCESS_METRIC}..."
-if ! "${G[@]}" logging metrics describe "$SUCCESS_METRIC" >/dev/null 2>&1; then
+if "${G[@]}" logging metrics describe "$SUCCESS_METRIC" >/dev/null 2>&1; then
+  "${G[@]}" logging metrics update "$SUCCESS_METRIC" --log-filter="$SUCCESS_FILTER" >/dev/null
+else
   "${G[@]}" logging metrics create "$SUCCESS_METRIC" \
     --description="Successful scheduled CCaaS Bulk Sync runs" --log-filter="$SUCCESS_FILTER"
 fi
 
-create_policy() { # display-name, json
-  if [ -n "$("${G[@]}" monitoring policies list --filter="displayName=\"$1\"" --format='value(name)' 2>/dev/null)" ]; then
-    echo "Alert policy \"$1\" already exists; skipping."
-    return
+create_policy() { # display-name, json  (creates, or updates an existing policy with the same name)
+  local f existing; f=$(mktemp); printf '%s' "$2" > "$f"
+  existing=$("${G[@]}" monitoring policies list --filter="displayName=\"$1\"" --format='value(name)' 2>/dev/null | head -1)
+  if [ -n "$existing" ]; then
+    "${G[@]}" monitoring policies update "$existing" --policy-from-file="$f" --format='value(name)' >/dev/null
+    echo "Updated alert policy \"$1\"."
+  else
+    "${G[@]}" monitoring policies create --policy-from-file="$f" --format='value(name)'
   fi
-  local f; f=$(mktemp); printf '%s' "$2" > "$f"
-  "${G[@]}" monitoring policies create --policy-from-file="$f" --format='value(name)'
   rm -f "$f"
 }
 
@@ -86,7 +91,7 @@ print(json.dumps({
   "displayName": "CCaaS Bulk Sync: no successful scheduled sync",
   "combiner": "OR",
   "conditions": [{"displayName": f"No successful scheduled sync for {hours}h",
-                  "conditionAbsent": {"filter": f'metric.type="logging.googleapis.com/user/{metric}" AND resource.type="cloud_run_revision"',
+                  "conditionAbsent": {"filter": f'metric.type="logging.googleapis.com/user/{metric}" AND resource.type=one_of("cloud_run_revision","cloud_run_job")',
                                       "duration": f"{hours * 3600}s",
                                       "aggregations": [{"alignmentPeriod": "3600s", "perSeriesAligner": "ALIGN_COUNT"}]}}],
   "notificationChannels": [ch],

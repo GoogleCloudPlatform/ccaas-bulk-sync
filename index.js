@@ -22,13 +22,15 @@ const { CloudSchedulerClient } = require('@google-cloud/scheduler');
 const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
 const path = require('path');
 const syncLogic = require('./sync-logic');
-const secrets = require('./secrets');
+const { createConfigStore } = require('./config-store');
+const { executeSync } = require('./sync-runner');
+const { launchSyncJob } = require('./job-launcher');
 const { requireAuth } = require('./auth');
 const { roleFor, requireAdmin, requireSyncPermission, isAdminListConfigured, warnIfAdminListMissing } = require('./authz');
 const { buildConfigToSave, ConfigValidationError, redactConfig } = require('./config-security');
-const { acquireSyncLock, SyncInProgressError } = require('./sync-lock');
+const { isSyncLocked } = require('./sync-lock');
 const runHistory = require('./run-history');
-const { SyncSafetyError, DEFAULT_MAX_DEACTIVATIONS, DEFAULT_SYNC_OPTIONS } = require('./sync-plan');
+const { DEFAULT_MAX_DEACTIVATIONS, DEFAULT_SYNC_OPTIONS } = require('./sync-plan');
 
 const app = express();
 app.disable('x-powered-by');
@@ -74,48 +76,10 @@ app.use('/api', requireAuth);
 const firestore = new Firestore();
 const schedulerClient = new CloudSchedulerClient();
 const secretClient = new SecretManagerServiceClient();
-const configDocRef = firestore.collection('ccaas-sync-config').doc('latest');
-
-// --- Helper Functions ---
-
-const _getSecret = (secretName) => secrets.getSecret(secretClient, secretName);
-const _setSecret = (secretName, secretValue) => secrets.setSecret(secretClient, secretName, secretValue);
-
-
-async function _getHydratedConfig(bodyWithSecrets = null) {
-    const doc = await configDocRef.get();
-    if (!doc.exists && !bodyWithSecrets) {
-        return null; 
-    }
-    const config = doc.exists ? doc.data() : {};
-
-    config.ccaas = config.ccaas || {};
-    config.directory = config.directory || {};
-
-    config.ccaas.apiKey = (bodyWithSecrets?.ccaas?.apiKey) 
-        ? bodyWithSecrets.ccaas.apiKey 
-        : await _getSecret(config.ccaas.apiKeySecretName);
-    
-    // Google Workspace: keyless delegation unless a stored JSON key is selected.
-    const googleAuthMode = bodyWithSecrets?.directory?.googleAuthMode
-        || config.directory.googleAuthMode
-        || (config.directory.gcpKeySecretName ? 'key' : 'keyless');
-    config.directory.googleAuthMode = googleAuthMode;
-
-    if(bodyWithSecrets?.directory) {
-        config.directory.gcpKey = googleAuthMode === 'key'
-            ? (bodyWithSecrets.directory.gcpKey || await _getSecret(config.directory.gcpKeySecretName))
-            : null;
-        config.directory.bindPassword = bodyWithSecrets.directory.bindPassword || await _getSecret(config.directory.bindPasswordSecretName);
-        config.directory.clientSecret = bodyWithSecrets.directory.clientSecret || await _getSecret(config.directory.clientSecretSecretName);
-    } else {
-        config.directory.gcpKey = googleAuthMode === 'key' ? await _getSecret(config.directory.gcpKeySecretName) : null;
-        config.directory.bindPassword = await _getSecret(config.directory.bindPasswordSecretName);
-        config.directory.clientSecret = await _getSecret(config.directory.clientSecretSecretName);
-    }
-
-    return config;
-}
+const store = createConfigStore({ firestore, secretClient });
+const configDocRef = store.configDocRef;
+const _getHydratedConfig = (bodyWithSecrets = null) => store.getHydratedConfig(bodyWithSecrets);
+const _setSecret = store.setSecret;
 
 // --- API Endpoints ---
 
@@ -213,43 +177,39 @@ app.post('/api/sync', requireSyncPermission, async (req, res) => {
     const allowLargeDeactivation = req.body?.allowLargeDeactivation === true && !isScheduler;
     const startedBy = req.user?.email || 'unknown';
     const trigger = isScheduler ? 'scheduled' : 'manual';
-    const startedAt = Date.now();
-    let lock = null;
 
-    const finish = async (fields) => {
-        const record = runHistory.buildRunRecord({ startedAt, finishedAt: Date.now(), trigger, startedBy, simulate, ...fields });
-        runHistory.logRun(record);
-        await runHistory.recordRun(firestore, record);
-    };
+    // Live syncs run in the Cloud Run Job when one is configured: start it and
+    // return 202 with a run ID the UI can poll. Simulations stay inline.
+    const jobName = process.env.SYNC_JOB_NAME;
+    if (!simulate && jobName) {
+        try {
+            if (await isSyncLocked(firestore)) {
+                return res.status(409).send('Another sync is already running.');
+            }
+            const runId = await runHistory.createQueuedRun(firestore, { trigger, startedBy });
+            await launchSyncJob({ jobName, region: process.env.REGION || 'us-central1', runId, trigger, startedBy, allowLargeDeactivation });
+            console.log('Started sync job %s for run %s (trigger=%s, by %s).', jobName, runId, trigger, startedBy);
+            return res.status(202).json({ queued: true, runId });
+        } catch (error) {
+            console.error('Could not start the sync job:', error.message);
+            return res.status(500).send(`Could not start the sync job: ${error.message}`);
+        }
+    }
 
+    const { status, body } = await executeSync({ firestore, getHydratedConfig: () => _getHydratedConfig(), trigger, startedBy, simulate, allowLargeDeactivation });
+    if (typeof body === 'string') return res.status(status).send(body);
+    return res.status(status).json(body);
+});
+
+app.get('/api/sync-runs/:runId', async (req, res) => {
+    if (!/^[A-Za-z0-9]{1,64}$/.test(req.params.runId)) return res.status(400).send('Invalid run ID.');
     try {
-        const config = await _getHydratedConfig();
-        if (!config) return res.status(400).send('Configuration must be saved before running a sync.');
-        if (!simulate) {
-            lock = await acquireSyncLock(firestore, { startedBy });
-        }
-        console.log('Sync requested by %s (trigger=%s, simulate=%s, allowLargeDeactivation=%s).', startedBy, trigger, simulate, allowLargeDeactivation);
-        const result = await syncLogic.runSync(config, { simulate, allowLargeDeactivation });
-        await finish({ result });
-        res.status(200).json(result);
+        const run = await runHistory.getRun(firestore, req.params.runId);
+        if (!run) return res.status(404).send('Run not found.');
+        res.status(200).json(run);
     } catch (error) {
-        if (error instanceof SyncInProgressError) {
-            await finish({ outcome: 'in_progress', error });
-            return res.status(409).send(error.message);
-        }
-        if (error instanceof SyncSafetyError) {
-            await finish({ outcome: 'blocked', error, extra: { blockedReason: error.details.reason || null } });
-            return res.status(422).json({ blocked: true, reason: error.details.reason, message: error.message, ...error.details });
-        }
-        if (error instanceof syncLogic.GroupNotFoundError) {
-            await finish({ outcome: 'group_not_found', error });
-            return res.status(422).send(error.message);
-        }
-        console.error('Error during sync:', error);
-        await finish({ outcome: 'error', error });
-        res.status(500).send(`Error during sync: ${error.message}`);
-    } finally {
-        if (lock) await lock.release();
+        console.error('Error reading sync run:', error);
+        res.status(500).send('Error reading sync run.');
     }
 });
 

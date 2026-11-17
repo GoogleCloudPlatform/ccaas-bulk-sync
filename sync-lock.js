@@ -76,4 +76,10 @@ async function acquireSyncLock(firestore, { startedBy = 'unknown', leaseMs = DEF
     };
 }
 
-module.exports = { acquireSyncLock, SyncInProgressError, DEFAULT_LEASE_MS };
+/** True if a live sync currently holds an unexpired lease (read-only check). */
+async function isSyncLocked(firestore) {
+    const snap = await firestore.collection('ccaas-sync-lock').doc('sync').get();
+    return snap.exists && snap.data().expiresAtMs > Date.now();
+}
+
+module.exports = { acquireSyncLock, isSyncLocked, SyncInProgressError, DEFAULT_LEASE_MS };

@@ -164,6 +164,37 @@ createApp({
             }
         };
 
+        const RUN_PENDING = ['queued', 'running'];
+        const waitForRun = async (runId) => {
+            const deadline = Date.now() + 70 * 60 * 1000;
+            while (Date.now() < deadline) {
+                await new Promise(resolve => setTimeout(resolve, 3000));
+                try {
+                    const r = await fetch(`${window.location.origin}/api/sync-runs/${encodeURIComponent(runId)}`);
+                    if (r.ok) {
+                        const run = await r.json();
+                        if (!RUN_PENDING.includes(run.outcome)) return run;
+                    }
+                } catch (error) {
+                    console.warn('Polling sync run failed; retrying.', error);
+                }
+            }
+            return { outcome: 'error', message: 'Timed out waiting for the sync job. Check Recent Sync Runs.' };
+        };
+        const showRunResult = (run) => {
+            const ok = ['job_finished', 'no_changes'].includes(run.outcome);
+            const titles = { job_finished: 'Sync Complete', no_changes: 'Sync Complete', blocked: 'Sync Blocked by Safety Check', group_not_found: 'Sync Aborted', in_progress: 'Another Sync Is Running' };
+            syncResultModal.value = {
+                show: true,
+                title: titles[run.outcome] || 'Sync Failed',
+                message: run.message,
+                status: ok ? 'success' : 'error',
+                preview: null,
+                warnings: run.warningsCount ? [`${run.warningsCount} warning(s); see the service logs for details.`] : [],
+                canOverride: run.outcome === 'blocked' && run.blockedReason === 'deactivation_limit'
+            };
+        };
+
         const runManualSync = async (simulate, allowLargeDeactivation = false) => {
             showSyncModal.value = false;
             syncResultModal.value.show = false;
@@ -186,6 +217,15 @@ createApp({
                 }
                 if (!response.ok) {
                     throw new Error(data.message || `Sync failed (${response.status}).`);
+                }
+                if (response.status === 202 && data.runId) {
+                    // The live sync runs in a Cloud Run Job; follow its run record.
+                    syncResultModal.value = { show: true, title: 'Sync Running', message: 'The sync job has started. This window updates when it finishes; you can close it and check Recent Sync Runs later.', status: 'success', preview: null, warnings: [], canOverride: false };
+                    fetchRuns();
+                    const run = await waitForRun(data.runId);
+                    showRunResult(run);
+                    fetchJobs();
+                    return;
                 }
                 syncResultModal.value = {
                     show: true,
@@ -326,6 +366,7 @@ createApp({
         const runOutcomeClass = (outcome) => {
             if (['job_finished', 'no_changes'].includes(outcome)) return 'bg-green-100 text-green-800';
             if (outcome === 'simulated') return 'bg-blue-100 text-blue-800';
+            if (['queued', 'running'].includes(outcome)) return 'bg-gray-100 text-gray-700';
             if (['blocked', 'group_not_found', 'in_progress'].includes(outcome)) return 'bg-yellow-100 text-yellow-800';
             return 'bg-red-100 text-red-800';
         };
