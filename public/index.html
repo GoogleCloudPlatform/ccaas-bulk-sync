@@ -444,7 +444,7 @@
                             <td class="pr-3"><span class="px-2 py-0.5 rounded-full font-semibold" :class="runOutcomeClass(run.outcome)">{{ run.outcome.replace(/_/g, ' ') }}</span></td>
                             <td class="pr-3 font-mono">{{ run.counts ? `${run.counts.add} / ${run.counts.update} / ${run.counts.deactivate}` : '-' }}</td>
                             <td class="pr-3 font-mono">{{ run.jobId || '-' }}</td>
-                            <td class="pr-3">{{ (run.durationMs / 1000).toFixed(1) }}s</td>
+                            <td class="pr-3">{{ run.durationMs == null ? '-' : (run.durationMs / 1000).toFixed(1) + 's' }}</td>
                         </tr>
                     </tbody>
                 </table>

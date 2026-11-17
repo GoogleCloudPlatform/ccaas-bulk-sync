@@ -61,9 +61,14 @@ function logRun(record, log = console.log) {
     log(JSON.stringify({ severity: severityFor(record.outcome), message: `sync_run ${record.outcome}: ${record.message}`, event: 'sync_run', ...record }));
 }
 
-async function recordRun(firestore, record) {
+/** Writes the final run record; with a runId it completes the queued run document. */
+async function recordRun(firestore, record, runId = null) {
     try {
-        await firestore.collection(COLLECTION).add(record);
+        if (runId) {
+            await firestore.collection(COLLECTION).doc(runId).set(record);
+        } else {
+            await firestore.collection(COLLECTION).add(record);
+        }
         await _prune(firestore);
     } catch (error) {
         console.warn('Could not record sync run: %s', error.message);
@@ -75,10 +80,31 @@ async function _prune(firestore) {
     await Promise.all(snap.docs.map(d => d.ref.delete()));
 }
 
+/** Creates the run document for a live sync handed to the Cloud Run Job. Returns its ID. */
+async function createQueuedRun(firestore, { trigger, startedBy }) {
+    const now = new Date().toISOString();
+    const ref = firestore.collection(COLLECTION).doc();
+    await ref.set({ startedAt: now, finishedAt: null, durationMs: null, trigger, startedBy: startedBy || 'unknown', simulate: false, outcome: 'queued', message: 'Waiting for the sync job to start.', counts: null, jobId: null, warningsCount: 0, blockedBy: null });
+    return ref.id;
+}
+
+async function markRunning(firestore, runId) {
+    try {
+        await firestore.collection(COLLECTION).doc(runId).set({ outcome: 'running', message: 'Sync job is running.' }, { merge: true });
+    } catch (error) {
+        console.warn('Could not mark run %s as running: %s', runId, error.message);
+    }
+}
+
+async function getRun(firestore, runId) {
+    const snap = await firestore.collection(COLLECTION).doc(runId).get();
+    return snap.exists ? { id: snap.id, ...snap.data() } : null;
+}
+
 async function listRuns(firestore, limit = 20) {
     const n = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
     const snap = await firestore.collection(COLLECTION).orderBy('startedAt', 'desc').limit(n).get();
     return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
-module.exports = { buildRunRecord, logRun, recordRun, listRuns, severityFor, ALERT_OUTCOMES, COLLECTION };
+module.exports = { buildRunRecord, logRun, recordRun, createQueuedRun, markRunning, getRun, listRuns, severityFor, ALERT_OUTCOMES, COLLECTION };

@@ -139,6 +139,8 @@ gcloud builds submit . \
   --substitutions=_REGION=$REGION,_REPO_NAME=$REPO_NAME,_SERVICE_NAME=$SERVICE_NAME,_SERVICE_ACCOUNT=$SERVICE_ACCOUNT_EMAIL
 ```
 
+Cloud Build deploys the service **and a Cloud Run Job, `<service>-sync`, that performs live syncs**. The UI and Cloud Scheduler ask the service to sync; the service starts the job and returns immediately, and the UI follows the run's progress. That way a sync that takes minutes isn't cut off by the roughly 30-second limit on browser requests through IAP. Simulations still run directly in the service.
+
 Cloud Build deploys the service with:
 - `--no-allow-unauthenticated` and `--ingress=internal-and-cloud-load-balancing`, so the `*.run.app` URL can't be reached from the internet;
 - `--timeout=900`, so a live sync has time to finish.
@@ -164,7 +166,7 @@ gcloud compute network-endpoint-groups create ccaas-sync-neg \
   --network-endpoint-type=serverless \
   --cloud-run-service=$SERVICE_NAME
 
-gcloud compute backend-services create ccaas-sync-backend --global
+gcloud compute backend-services create ccaas-sync-backend --global --timeout=300
 gcloud compute backend-services add-backend ccaas-sync-backend \
   --global \
   --network-endpoint-group=ccaas-sync-neg \
@@ -366,6 +368,13 @@ Other behavior to be aware of:
 - Logs contain only counts and job IDs, never user details.
 
 ## Upgrading
+
+### To 2.0.0
+
+1. Run **Simulate Only** first. Sync results change: teams accumulate, unmanaged CCaaS users are skipped, and names are synced. See the CHANGELOG.
+2. Redeploy with Cloud Build (step 5) or Terraform. This creates the `<service>-sync` Cloud Run Job and sets `SYNC_JOB_NAME` on the service.
+3. If you use alerts, re-run `scripts/setup-alerts.sh`. It now updates the existing policies so they include the job's logs.
+4. Load balancer setups: raise the backend timeout: `gcloud compute backend-services update ccaas-sync-backend --global --timeout=300`.
 
 ### To 1.3.0 (hardening)
 

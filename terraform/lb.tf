@@ -32,6 +32,8 @@ resource "google_compute_backend_service" "app" {
   name                  = "${var.service_name}-backend"
   load_balancing_scheme = "EXTERNAL_MANAGED"
   protocol              = "HTTPS"
+  # Simulations can take longer than the 30s default for large tenants.
+  timeout_sec = 300
   backend {
     group = google_compute_region_network_endpoint_group.app[0].id
   }

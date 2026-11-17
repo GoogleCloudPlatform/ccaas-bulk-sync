@@ -162,6 +162,10 @@ resource "google_cloud_run_v2_service" "app" {
         name  = "SCHEDULER_OIDC_AUDIENCE"
         value = local.cloud_run_iap ? var.scheduler_oauth_client_id : ""
       }
+      env {
+        name  = "SYNC_JOB_NAME"
+        value = google_cloud_run_v2_job.sync.name
+      }
       startup_probe {
         http_get {
           path = "/healthz"
@@ -244,4 +248,45 @@ resource "google_project_iam_member" "build_source" {
   project = var.project_id
   role    = "roles/storage.objectViewer"
   member  = google_service_account.build.member
+}
+
+# --- Cloud Run Job for live syncs ---
+# The service starts it per run (with overrides) and returns immediately, so
+# long syncs aren't cut off by the ~30s browser/IAP request limit.
+
+resource "google_cloud_run_v2_job" "sync" {
+  name                = "${var.service_name}-sync"
+  location            = var.region
+  deletion_protection = false
+
+  template {
+    task_count = 1
+    template {
+      service_account = google_service_account.runtime.email
+      timeout         = "3600s"
+      max_retries     = 0
+      containers {
+        image   = var.image
+        command = ["node"]
+        args    = ["job.js"]
+        env {
+          name  = "SERVICE_ACCOUNT"
+          value = google_service_account.runtime.email
+        }
+        env {
+          name  = "REGION"
+          value = var.region
+        }
+      }
+    }
+  }
+
+  depends_on = [google_project_service.apis, google_secret_manager_secret_iam_member.access]
+}
+
+resource "google_cloud_run_v2_job_iam_member" "service_runs_job" {
+  name     = google_cloud_run_v2_job.sync.name
+  location = var.region
+  role     = "roles/run.jobsExecutorWithOverrides"
+  member   = google_service_account.runtime.member
 }
