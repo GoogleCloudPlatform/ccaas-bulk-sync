@@ -30,7 +30,7 @@ variable "service_name" {
 }
 
 variable "image" {
-  description = "Container image to deploy, e.g. us-central1-docker.pkg.dev/PROJECT/ccaas-sync-repo/ccaas-sync-service:v1.4.0. Build it first (see terraform/README.md)."
+  description = "Container image to deploy, e.g. us-central1-docker.pkg.dev/PROJECT/ccaas-sync-repo/ccaas-sync-service:v2.0.0. Build it first (see terraform/README.md)."
   type        = string
 }
 

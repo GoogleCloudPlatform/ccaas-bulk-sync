@@ -411,9 +411,10 @@ Other behavior to be aware of:
 ### To 2.0.0
 
 1. Run **Simulate Only** first. Sync results change: teams accumulate, unmanaged CCaaS users are skipped, and names are synced. See the CHANGELOG.
-2. Redeploy with Cloud Build (step 5) or Terraform. This creates the `<service>-sync` Cloud Run Job and sets `SYNC_JOB_NAME` on the service.
+2. Redeploy with Cloud Build (step 5, keeping the `_INGRESS` you use today) or Terraform (image tag `v2.0.0`). This creates the `<service>-sync` Cloud Run Job and sets `SYNC_JOB_NAME` on the service.
 3. If you use alerts, re-run `scripts/setup-alerts.sh`. It now updates the existing policies so they include the job's logs.
 4. Load balancer setups: raise the backend timeout: `gcloud compute backend-services update ccaas-sync-backend --global --timeout=300`.
+5. Hard-reload the UI. The template is now precompiled, so the security policy no longer allows `'unsafe-eval'`.
 
 ### To 1.3.0 (hardening)
 
