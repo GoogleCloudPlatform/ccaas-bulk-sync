@@ -15,7 +15,7 @@ It runs on Cloud Run, stores its configuration in Firestore and its credentials 
 
 ```bash
 npm install
-npm run build:css
+npm run build   # CSS and the precompiled Vue template (rerun after editing public/index.html)
 ALLOW_INSECURE_LOCAL_DEV=true node index.js   # http://localhost:8080
 npm test
 ```

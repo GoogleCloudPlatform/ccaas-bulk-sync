@@ -29,3 +29,6 @@ body { font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-se
     align-items: center;
     z-index: 50;
 }
+
+/* Hide the raw template until Vue mounts. */
+[v-cloak] { display: none; }

@@ -25,8 +25,9 @@ RUN npm ci --no-fund --no-audit
 # Copy the rest of the application source code
 COPY . .
 
-# Build the production CSS file, then drop dev dependencies.
-RUN npm run build:css && npm prune --omit=dev --no-fund --no-audit
+# Build the production CSS and the precompiled Vue template, then drop dev
+# dependencies.
+RUN npm run build && npm prune --omit=dev --no-fund --no-audit
 
 # Stage 2: Create the final production image
 FROM node:22-slim

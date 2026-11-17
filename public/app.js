@@ -38,6 +38,8 @@ async function apiFetch(url, options) {
 const CRON_RE = /^(\S+\s+){4}\S+$/;
 
 createApp({
+    // Precompiled from the #app template in index.html by scripts/build-ui.js.
+    render: window.__ccaasRender,
     setup() {
         const config = ref({
             ccaas: {},
