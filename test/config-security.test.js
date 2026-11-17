@@ -187,3 +187,32 @@ test('validateSyncOptions: defaults and validation', () => {
     assert.throws(() => validateSyncOptions({ existingUsers: 'merge' }), ConfigValidationError);
     assert.throws(() => validateSyncOptions({ syncNames: 'yes' }), ConfigValidationError);
 });
+
+const { validateSchedule, isValidCron } = require('../config-security');
+
+test('isValidCron accepts common expressions and rejects bad ones', () => {
+    for (const ok of ['* * * * *', '0 * * * *', '*/15 * * * *', '0 6 * * 1-5', '30 2 1,15 * *', '0 0-23/2 * * 0']) {
+        assert.ok(isValidCron(ok), ok);
+    }
+    for (const bad of ['', '* * * *', '60 * * * *', '0 24 * * *', '0 0 0 * *', '0 0 * 13 *', '0 0 * * 8', '*/0 * * * *', '5-2 * * * *', 'a b c d e', '0 6 * * MON']) {
+        assert.ok(!isValidCron(bad), bad);
+    }
+});
+
+test('validateSchedule normalizes and reports the failing field', () => {
+    assert.deepStrictEqual(validateSchedule({ type: 'hourly' }), { type: 'hourly', time: '00:00', cron: '', timeZone: 'UTC', initialPollDelay: 15 });
+    assert.deepStrictEqual(validateSchedule({ type: 'daily', time: '06:30', timeZone: 'Europe/London', initialPollDelay: '20' }).timeZone, 'Europe/London');
+    const fieldOf = (s) => { try { validateSchedule(s); return null; } catch (e) { return e.field; } };
+    assert.strictEqual(fieldOf({ type: 'custom', cron: '61 * * * *' }), 'schedule.cron');
+    assert.strictEqual(fieldOf({ type: 'daily', time: '25:00' }), 'schedule.time');
+    assert.strictEqual(fieldOf({ type: 'hourly', timeZone: 'Mars/Olympus' }), 'schedule.timeZone');
+    assert.strictEqual(fieldOf({ type: 'weekly' }), 'schedule.type');
+    assert.strictEqual(fieldOf({ type: 'hourly', initialPollDelay: 600 }), 'schedule.initialPollDelay');
+});
+
+test('validation errors carry the field the UI should highlight', () => {
+    const fieldOf = (fn) => { try { fn(); return null; } catch (e) { return e.field; } };
+    assert.strictEqual(fieldOf(() => validateLdapUrl('http://x')), 'directory.url');
+    assert.strictEqual(fieldOf(() => validateCcaasHost('https://x')), 'ccaas.host');
+    assert.strictEqual(fieldOf(() => buildConfigToSave(STORED, incomingFrom(STORED, { ccaas: { host: 'other.ccaiplatform.com' } }))), 'ccaas.apiKey');
+});

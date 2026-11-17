@@ -8,6 +8,13 @@
 - **Nested groups** (opt-in per mapping): include members of nested groups via AD `LDAP_MATCHING_RULE_IN_CHAIN`, Entra ID `transitiveMembers`, or Google Workspace `includeDerivedMembership`.
 - Simulations and run history report a `skipped` count; the simulation preview lists skipped users.
 
+### Added (UI)
+- **Simulation diff:** a per-user table showing what each change does: adds with their teams and roles; updates with + and − teams and roles and name changes; deactivations; skipped users. Returned only in simulation responses, never logged or stored.
+- **Schedule time zone** (IANA, default UTC; daylight saving time handled by Cloud Scheduler) and **validation** of the schedule type, daily time, cron expression (5 numeric fields) and poll delay on save, plus an inline cron hint.
+- **Inline form errors:** validation errors return `{message, field}` and the UI shows them next to the field.
+- **Expired sign-in:** instead of "Failed to fetch", a banner explains that the IAP session may have expired and offers **Reload and sign in**.
+- The nested-groups option is easier to see in each mapping.
+
 ### Changed (architecture)
 - **Live syncs run in a Cloud Run Job** (`<service>-sync`, one task, no retries, 1-hour timeout). `POST /api/sync` starts it and returns `202` with a run ID; the UI follows the run through the new `GET /api/sync-runs/:id`. This fixes live syncs started from the UI failing with "Failed to fetch" when they took longer than the roughly 30-second request limit through IAP. Simulations still run inline. If `SYNC_JOB_NAME` isn't set, live syncs run inline as before.
 - Run history records a run as `queued` → `running` → final outcome. The job holds the sync lock for the whole run.

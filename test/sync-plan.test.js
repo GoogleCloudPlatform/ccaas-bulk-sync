@@ -177,3 +177,16 @@ test('safety: limit 0 blocks any deactivation', () => {
     assert.throws(() => assertPlanIsSafe({ usersToDeactivate: [{}], managedActiveCount: 5 }, 4, { maxDeactivations: 0 }), SyncSafetyError);
     assert.doesNotThrow(() => assertPlanIsSafe({ usersToDeactivate: [], managedActiveCount: 5 }, 5, { maxDeactivations: 0 }));
 });
+
+test('plan details describe each change for the simulation diff', () => {
+    const { users } = dir([['g', [{ type: 'role', value: 'Supervisor' }, { type: 'team', value: 'Support' }], ['a@x.com', 'new@x.com']]]);
+    const ccaas = [ccaasUser('a@x.com', { roles: ['Agent'], team: 'Sales' }), ccaasUser('gone@x.com')];
+    const plan = computeSyncPlan({ directoryUsers: users, ccaasUsers: ccaas, template: TEMPLATE, syncRole: SYNC_ROLE });
+    const byEmail = Object.fromEntries(plan.details.map(d => [d.email, d]));
+    assert.deepStrictEqual(byEmail['new@x.com'], { action: 'add', email: 'new@x.com', roles: ['Supervisor'], teams: ['Support'] });
+    assert.deepStrictEqual(byEmail['a@x.com'].roles, { added: ['Supervisor'], removed: ['Agent'] });
+    assert.deepStrictEqual(byEmail['a@x.com'].teams, { added: ['Support'], removed: ['Sales'] });
+    assert.strictEqual(byEmail['gone@x.com'].action, 'deactivate');
+    // Details are metadata only; the CCaaS payload has no "details".
+    assert.ok(!plan.usersToUpdate.some(u => 'details' in u));
+});

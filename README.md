@@ -365,7 +365,7 @@ Other behavior to be aware of:
 - **Existing CCaaS users** who don't have the sync role are **skipped and reported** by default. Set **Existing CCaaS Users** to **Adopt** to give them the sync role. Their roles and teams are then set from the mappings.
 - **Nested groups** (per mapping, off by default): with **Include members of nested groups** checked, members of groups nested inside the mapped group count too, at any depth. This uses AD's in-chain matching rule (`LDAP_MATCHING_RULE_IN_CHAIN`), Entra ID `transitiveMembers`, or Google Workspace derived membership. Simulate first: turning it on can match many more users.
 - **First and last names** are synced from the directory, and can be turned off. An empty directory name never blanks a CCaaS name.
-- Scheduled times are in UTC.
+- Scheduled times use the schedule's **time zone** (default UTC).
 - Logs contain only counts and job IDs, never user details.
 
 ## Upgrading

@@ -163,7 +163,10 @@ function computeSyncPlan({ directoryUsers, ccaasUsers, template, syncRole, optio
     const usersToUpdate = [];
     const usersToDeactivate = [];
     const usersSkipped = [];
+    // Human-readable change details for the simulation preview (never sent to CCaaS).
+    const details = [];
     let adoptedCount = 0;
+    const diff = (before, after) => ({ added: after.filter(x => !before.includes(x)), removed: before.filter(x => !after.includes(x)) });
 
     const newUser = (dirUser, roles, teams) => {
         const user = JSON.parse(JSON.stringify(template));
@@ -185,6 +188,7 @@ function computeSyncPlan({ directoryUsers, ccaasUsers, template, syncRole, optio
 
         if (!current) {
             usersToAdd.push(newUser(dirUser, roles, teams));
+            details.push({ action: 'add', email: dirUser.email, roles, teams });
             continue;
         }
 
@@ -196,16 +200,21 @@ function computeSyncPlan({ directoryUsers, ccaasUsers, template, syncRole, optio
             adoptedCount++;
             if (!_isActive(current)) {
                 usersToAdd.push(newUser(dirUser, roles, teams));
+                details.push({ action: 'add', email: dirUser.email, roles, teams, note: 'adopted (reactivated)' });
                 continue;
             }
+            const before = _currentAssignments(current, syncRole);
+            const names = opts.syncNames ? _nameChanges(current, dirUser) : {};
             const user = _stripReadOnlyFields(JSON.parse(JSON.stringify(current)));
-            Object.assign(user, opts.syncNames ? _nameChanges(current, dirUser) : {});
+            Object.assign(user, names);
             usersToUpdate.push(_applyAssignments(user, template, syncRole, roles, teams));
+            details.push({ action: 'update', email: current.email, note: 'adopted', roles: diff(before.roles, roles), teams: diff(before.teams, teams), names });
             continue;
         }
 
         if (!_isActive(current)) {
             usersToAdd.push(newUser(dirUser, roles, teams));
+            details.push({ action: 'add', email: dirUser.email, roles, teams, note: 'reactivated' });
             continue;
         }
 
@@ -217,6 +226,7 @@ function computeSyncPlan({ directoryUsers, ccaasUsers, template, syncRole, optio
             const user = _stripReadOnlyFields(JSON.parse(JSON.stringify(current)));
             Object.assign(user, names);
             usersToUpdate.push(_applyAssignments(user, template, syncRole, roles, teams));
+            details.push({ action: 'update', email: current.email, roles: diff(now.roles, roles), teams: diff(now.teams, teams), names });
         }
     }
 
@@ -228,6 +238,7 @@ function computeSyncPlan({ directoryUsers, ccaasUsers, template, syncRole, optio
             const user = _stripReadOnlyFields(JSON.parse(JSON.stringify(current)));
             user.status = 'Inactive';
             usersToDeactivate.push(user);
+            details.push({ action: 'deactivate', email: current.email });
         }
     }
 
@@ -237,7 +248,9 @@ function computeSyncPlan({ directoryUsers, ccaasUsers, template, syncRole, optio
         }
     }
 
-    return { usersToAdd, usersToUpdate, usersToDeactivate, usersSkipped, adoptedCount, managedActiveCount };
+    for (const s of usersSkipped) details.push({ action: 'skip', email: s.email, note: s.reason });
+
+    return { usersToAdd, usersToUpdate, usersToDeactivate, usersSkipped, adoptedCount, managedActiveCount, details };
 }
 
 /**

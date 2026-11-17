@@ -25,9 +25,11 @@
  */
 
 class ConfigValidationError extends Error {
-    constructor(message) {
+    /** @param {string} message @param {string|null} field  Config path the UI highlights, e.g. "ccaas.host". */
+    constructor(message, field = null) {
         super(message);
         this.name = 'ConfigValidationError';
+        this.field = field;
     }
 }
 
@@ -118,11 +120,11 @@ function validateCcaasHost(value) {
     const host = _optionalString(value, 'CCaaS host').toLowerCase();
     if (!host) return '';
     if (!HOSTNAME_RE.test(host)) {
-        throw new ConfigValidationError('CCaaS host must be a plain host name (for example "acme.ccaiplatform.com") without scheme, port, or path.');
+        throw new ConfigValidationError('CCaaS host must be a plain host name (for example "acme.ccaiplatform.com") without scheme, port, or path.', 'ccaas.host');
     }
     const suffixes = _allowedCcaasHostSuffixes();
     if (suffixes.length > 0 && !suffixes.some(s => host === s.replace(/^\./, '') || host.endsWith(s.startsWith('.') ? s : `.${s}`))) {
-        throw new ConfigValidationError(`CCaaS host must end with one of: ${suffixes.join(', ')}.`);
+        throw new ConfigValidationError(`CCaaS host must end with one of: ${suffixes.join(', ')}.`, 'ccaas.host');
     }
     return host;
 }
@@ -135,16 +137,16 @@ function validateLdapUrl(value) {
     try {
         parsed = new URL(raw);
     } catch (e) {
-        throw new ConfigValidationError('LDAP URL is not a valid URL.');
+        throw new ConfigValidationError('LDAP URL is not a valid URL.', 'directory.url');
     }
     if (parsed.protocol !== 'ldap:' && parsed.protocol !== 'ldaps:') {
-        throw new ConfigValidationError('LDAP URL must use the ldap:// or ldaps:// scheme.');
+        throw new ConfigValidationError('LDAP URL must use the ldap:// or ldaps:// scheme.', 'directory.url');
     }
     if (!parsed.hostname || parsed.username || parsed.password) {
-        throw new ConfigValidationError('LDAP URL must contain a host name and no credentials.');
+        throw new ConfigValidationError('LDAP URL must contain a host name and no credentials.', 'directory.url');
     }
     if ((parsed.pathname && parsed.pathname !== '/') || parsed.search || parsed.hash) {
-        throw new ConfigValidationError('LDAP URL must not contain a path, query, or fragment.');
+        throw new ConfigValidationError('LDAP URL must not contain a path, query, or fragment.', 'directory.url');
     }
     return `${parsed.protocol}//${parsed.host}`;
 }
@@ -152,7 +154,7 @@ function validateLdapUrl(value) {
 function validateTenantId(value) {
     const tenantId = _optionalString(value, 'Tenant ID');
     if (tenantId && !TENANT_ID_RE.test(tenantId)) {
-        throw new ConfigValidationError('Tenant ID must be a directory (tenant) GUID or domain name.');
+        throw new ConfigValidationError('Tenant ID must be a directory (tenant) GUID or domain name.', 'directory.tenantId');
     }
     return tenantId;
 }
@@ -160,7 +162,7 @@ function validateTenantId(value) {
 function validateClientId(value) {
     const clientId = _optionalString(value, 'Client ID');
     if (clientId && !CLIENT_ID_RE.test(clientId)) {
-        throw new ConfigValidationError('Client ID must be an application (client) GUID.');
+        throw new ConfigValidationError('Client ID must be an application (client) GUID.', 'directory.clientId');
     }
     return clientId;
 }
@@ -182,6 +184,70 @@ function validateGoogleAuthMode(value) {
         throw new ConfigValidationError('Google authentication mode must be "keyless" or "key".');
     }
     return mode;
+}
+
+const CRON_RANGES = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]];
+
+/**
+ * Basic 5-field cron check (minute hour day-of-month month day-of-week).
+ * Each field is a comma-separated list of "*", "N" or "N-M", each optionally
+ * followed by "/STEP". Numeric values only (no month/day names).
+ */
+function isValidCron(expr) {
+    if (typeof expr !== 'string') return false;
+    const fields = expr.trim().split(/\s+/);
+    if (fields.length !== 5) return false;
+    return fields.every((field, i) => {
+        const [lo, hi] = CRON_RANGES[i];
+        return field.split(',').every((part) => {
+            const m = /^(\*|(\d+)(?:-(\d+))?)(?:\/(\d+))?$/.exec(part);
+            if (!m) return false;
+            const [, , start, end, step] = m;
+            if (step !== undefined && Number(step) < 1) return false;
+            if (start === undefined) return true; // "*"
+            const a = Number(start);
+            const b = end === undefined ? a : Number(end);
+            return a >= lo && b <= hi && a <= b;
+        });
+    });
+}
+
+function isValidTimeZone(tz) {
+    if (typeof tz !== 'string' || !tz) return false;
+    try {
+        new Intl.DateTimeFormat('en-US', { timeZone: tz });
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+/** Validates the schedule (type, daily time, cron, time zone, poll delay). */
+function validateSchedule(schedule) {
+    if (!schedule || typeof schedule !== 'object' || Array.isArray(schedule)) {
+        throw new ConfigValidationError('Schedule settings are missing.', 'schedule.type');
+    }
+    const type = schedule.type || 'manual';
+    if (!['manual', 'hourly', 'daily', 'custom'].includes(type)) {
+        throw new ConfigValidationError('Schedule type must be manual, hourly, daily or custom.', 'schedule.type');
+    }
+    const time = typeof schedule.time === 'string' && schedule.time ? schedule.time : '00:00';
+    if (type === 'daily' && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
+        throw new ConfigValidationError('Daily time must be HH:MM (24-hour).', 'schedule.time');
+    }
+    const cron = typeof schedule.cron === 'string' ? schedule.cron.trim() : '';
+    if (type === 'custom' && !isValidCron(cron)) {
+        throw new ConfigValidationError('Cron schedule must have 5 fields: minute hour day-of-month month day-of-week (for example "0 6 * * 1-5").', 'schedule.cron');
+    }
+    const timeZone = schedule.timeZone || 'UTC';
+    if (!isValidTimeZone(timeZone)) {
+        throw new ConfigValidationError('Time zone must be an IANA time zone such as "UTC" or "Europe/London".', 'schedule.timeZone');
+    }
+    const delay = schedule.initialPollDelay === undefined || schedule.initialPollDelay === '' ? 15 : Number(schedule.initialPollDelay);
+    if (!Number.isFinite(delay) || delay < 5 || delay > 60) {
+        throw new ConfigValidationError('Initial poll delay must be between 5 and 60 seconds.', 'schedule.initialPollDelay');
+    }
+    return { type, time, cron, timeZone, initialPollDelay: Math.round(delay) };
 }
 
 /** Validates sync behavior options. */
@@ -207,14 +273,14 @@ function validateSafety(safety) {
     }
     const max = safety.maxDeactivations;
     if (!Number.isInteger(max) || max < 0 || max > 100000) {
-        throw new ConfigValidationError('Max deactivations per sync must be a whole number between 0 and 100000.');
+        throw new ConfigValidationError('Max deactivations per sync must be a whole number between 0 and 100000.', 'safety.maxDeactivations');
     }
     return { maxDeactivations: max };
 }
 
-function _requireSecretOnDestinationChange({ destinationChanged, hasStoredSecret, newSecretProvided, message }) {
+function _requireSecretOnDestinationChange({ destinationChanged, hasStoredSecret, newSecretProvided, message, field = null }) {
     if (destinationChanged && hasStoredSecret && !newSecretProvided) {
-        throw new ConfigValidationError(message);
+        throw new ConfigValidationError(message, field);
     }
 }
 
@@ -245,6 +311,7 @@ function buildConfigToSave(current, incoming) {
             hasStoredSecret: !!stored.apiKeySecretName,
             newSecretProvided: !!apiKey,
             message: 'The CCaaS API key must be re-entered when the CCaaS host is changed.',
+            field: 'ccaas.apiKey',
         });
 
         configToSave.ccaas = { ...stored, host };
@@ -269,12 +336,14 @@ function buildConfigToSave(current, incoming) {
             hasStoredSecret: !!stored.bindPasswordSecretName,
             newSecretProvided: !!bindPassword,
             message: 'The Active Directory bind password must be re-entered when the LDAP URL is changed.',
+            field: 'directory.bindPassword',
         });
         _requireSecretOnDestinationChange({
             destinationChanged: tenantId !== _norm(stored.tenantId) || clientId !== _norm(stored.clientId),
             hasStoredSecret: !!stored.clientSecretSecretName,
             newSecretProvided: !!clientSecret,
             message: 'The Entra ID client secret must be re-entered when the Tenant ID or Client ID is changed.',
+            field: 'directory.clientSecret',
         });
 
         configToSave.directory = {
@@ -308,7 +377,9 @@ function buildConfigToSave(current, incoming) {
     }
 
     configToSave.mappings = incoming.mappings;
-    configToSave.schedule = incoming.schedule;
+    if (incoming.schedule !== undefined) {
+        configToSave.schedule = validateSchedule(incoming.schedule);
+    }
     configToSave.syncRole = incoming.syncRole;
     if (incoming.safety !== undefined) {
         configToSave.safety = validateSafety(incoming.safety);
@@ -329,6 +400,8 @@ module.exports = {
     validateClientId,
     validateSafety,
     validateSyncOptions,
+    validateSchedule,
+    isValidCron,
     validateGoogleAuthMode,
     redactConfig,
     extractLegacyPlaintextSecrets,

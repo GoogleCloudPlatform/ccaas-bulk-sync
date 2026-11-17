@@ -102,7 +102,7 @@ app.get('/api/config', async (req, res) => {
             ccaas: { host: '' },
             directory: { type: 'google', adminEmail: '', url: '', bindDN: '', searchBase: '', tenantId: '', clientId: '', entraIdEmailField: 'mail' },
             mappings: [],
-            schedule: { type: 'manual', time: '00:00', cron: '* * * * *', initialPollDelay: 15 },
+            schedule: { type: 'manual', time: '00:00', cron: '0 * * * *', timeZone: 'UTC', initialPollDelay: 15 },
             safety: { maxDeactivations: DEFAULT_MAX_DEACTIVATIONS },
             syncOptions: { ...DEFAULT_SYNC_OPTIONS },
             syncRole: ''
@@ -148,7 +148,7 @@ app.post('/api/config', requireAdmin, async (req, res) => {
             ({ configToSave, secretsToSet } = buildConfigToSave(currentConfig, req.body));
         } catch (error) {
             if (error instanceof ConfigValidationError) {
-                return res.status(400).send(error.message);
+                return res.status(400).json({ message: error.message, field: error.field });
             }
             throw error;
         }
@@ -407,7 +407,7 @@ async function setupScheduler(scheduleConfig = { type: 'manual' }) {
             oidcToken,
         },
         schedule: cronSchedule,
-        timeZone: 'UTC',
+        timeZone: scheduleConfig.timeZone || 'UTC',
         attemptDeadline: { seconds: SCHEDULER_ATTEMPT_DEADLINE_SECONDS },
         retryConfig: { retryCount: 0 },
     };
@@ -418,7 +418,7 @@ async function setupScheduler(scheduleConfig = { type: 'manual' }) {
     } else {
         await schedulerClient.createJob({ parent: schedulerClient.locationPath(projectId, location), job });
     }
-    console.log(`Scheduler job ${exists ? 'updated' : 'created'} with schedule "${cronSchedule}" (UTC).`);
+    console.log('Scheduler job %s with schedule "%s" (%s).', exists ? 'updated' : 'created', cronSchedule, job.timeZone);
 }
 
 

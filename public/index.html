@@ -46,6 +46,12 @@
             </button>
         </div>
         
+        <!-- Session expired banner -->
+        <div v-if="sessionExpired" class="fixed top-0 inset-x-0 z-50 bg-yellow-100 border-b border-yellow-400 text-yellow-900 text-sm px-4 py-2 flex items-center justify-center gap-4" role="alert">
+            <span>Your sign-in session may have expired, so the last request didn't reach the service.</span>
+            <button @click="reloadPage" class="px-3 py-1 bg-yellow-600 text-white rounded font-semibold hover:bg-yellow-700">Reload and sign in</button>
+        </div>
+
         <!-- Global Status Message Toast -->
         <div class="fixed top-5 left-1/2 -translate-x-1/2 z-50">
              <transition name="fade">
@@ -102,10 +108,12 @@
                 <div>
                     <label for="ccaas-host" class="block text-sm font-medium text-gray-600 mb-1">CCaaS Host</label>
                     <input type="text" id="ccaas-host" v-model="config.ccaas.host" @input="parseCcaasHost" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    <p v-if="fieldErrors['ccaas.host']" class="mt-1 text-xs text-red-600">{{ fieldErrors['ccaas.host'] }}</p>
                 </div>
                 <div>
                     <label for="ccaas-apikey" class="block text-sm font-medium text-gray-600 mb-1">API Key</label>
                     <input type="password" id="ccaas-apikey" v-model="config.ccaas.apiKey" autocomplete="off" placeholder="Enter new key (leave blank to keep existing)" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    <p v-if="fieldErrors['ccaas.apiKey']" class="mt-1 text-xs text-red-600">{{ fieldErrors['ccaas.apiKey'] }}</p>
                 </div>
                 <div class="flex items-center justify-start gap-4">
                      <button @click="testCcaasConnection" :disabled="isTestingConnection || !isAdmin" class="px-4 py-2 text-sm bg-gray-200 text-gray-700 font-semibold rounded-lg hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400 disabled:opacity-50">
@@ -133,23 +141,35 @@
                         <option value="custom">Custom (Cron)</option>
                     </select>
                 </div>
+                <div v-if="config.schedule.type !== 'manual'">
+                    <label class="block text-sm font-medium text-gray-600 mb-1">Time Zone</label>
+                    <input type="text" list="time-zones" v-model="config.schedule.timeZone" placeholder="UTC" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm">
+                    <datalist id="time-zones"><option v-for="tz in timeZones" :key="tz" :value="tz"></option></datalist>
+                    <p v-if="fieldErrors['schedule.timeZone']" class="mt-1 text-xs text-red-600">{{ fieldErrors['schedule.timeZone'] }}</p>
+                    <p class="mt-1 text-xs text-gray-500">IANA time zone for the schedule, e.g. Europe/London or America/New_York. Daylight saving time is handled automatically.</p>
+                </div>
                 <div v-if="config.schedule.type === 'daily'">
-                    <label class="block text-sm font-medium text-gray-600 mb-1">Time (UTC)</label>
+                    <label class="block text-sm font-medium text-gray-600 mb-1">Time ({{ config.schedule.timeZone || 'UTC' }})</label>
                     <input type="time" v-model="config.schedule.time" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    <p v-if="fieldErrors['schedule.time']" class="mt-1 text-xs text-red-600">{{ fieldErrors['schedule.time'] }}</p>
                 </div>
                  <div v-if="config.schedule.type === 'custom'">
                     <label class="block text-sm font-medium text-gray-600 mb-1">Cron Schedule</label>
                     <input type="text" v-model="config.schedule.cron" placeholder="* * * * *" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm font-mono text-sm">
-                    <p class="mt-1 text-xs text-gray-500">Enter a valid <a href="https://cloud.google.com/scheduler/docs/configuring/cron-job-schedules" target="_blank" class="text-blue-600 hover:underline">cron schedule string</a>.</p>
+                    <p v-if="fieldErrors['schedule.cron']" class="mt-1 text-xs text-red-600">{{ fieldErrors['schedule.cron'] }}</p>
+                    <p v-if="config.schedule.cron && !cronLooksValid" class="mt-1 text-xs text-red-600">This doesn't look like a 5-field cron expression (minute hour day-of-month month day-of-week).</p>
+                    <p class="mt-1 text-xs text-gray-500">Enter a valid <a href="https://cloud.google.com/scheduler/docs/configuring/cron-job-schedules" target="_blank" rel="noopener" class="text-blue-600 hover:underline">cron schedule string</a>, e.g. <span class="font-mono">0 6 * * 1-5</span>.</p>
                 </div>
                  <div>
                     <label class="block text-sm font-medium text-gray-600 mb-1">Initial Poll Delay (seconds)</label>
                     <input type="number" v-model.number="config.schedule.initialPollDelay" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm">
+                    <p v-if="fieldErrors['schedule.initialPollDelay']" class="mt-1 text-xs text-red-600">{{ fieldErrors['schedule.initialPollDelay'] }}</p>
                     <p class="mt-1 text-xs text-gray-500">Wait time after upload before checking job status.</p>
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-600 mb-1">Max Deactivations per Sync</label>
                     <input type="number" min="0" step="1" v-model.number="config.safety.maxDeactivations" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm">
+                    <p v-if="fieldErrors['safety.maxDeactivations']" class="mt-1 text-xs text-red-600">{{ fieldErrors['safety.maxDeactivations'] }}</p>
                     <p class="mt-1 text-xs text-gray-500">Safety limit. A sync that would deactivate more users than this is blocked (scheduled runs always; manual runs ask for confirmation). Use 0 to block all deactivations.</p>
                 </div>
                 <div>
@@ -228,6 +248,7 @@
                     <div>
                         <label class="block text-sm font-medium text-gray-600 mb-1">LDAP URL (e.g., ldap://dc.example.com)</label>
                         <input type="text" v-model="config.directory.url" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm">
+                        <p v-if="fieldErrors['directory.url']" class="mt-1 text-xs text-red-600">{{ fieldErrors['directory.url'] }}</p>
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-600 mb-1">Bind DN (e.g., cn=admin,dc=example,dc=com)</label>
@@ -236,6 +257,7 @@
                     <div>
                         <label class="block text-sm font-medium text-gray-600 mb-1">Bind Password</label>
                         <input type="password" v-model="config.directory.bindPassword" autocomplete="off" placeholder="Enter new password (leave blank to keep existing)" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm">
+                        <p v-if="fieldErrors['directory.bindPassword']" class="mt-1 text-xs text-red-600">{{ fieldErrors['directory.bindPassword'] }}</p>
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-600 mb-1">Search Base (e.g., ou=users,dc=example,dc=com)</label>
@@ -246,14 +268,17 @@
                     <div>
                         <label class="block text-sm font-medium text-gray-600 mb-1">Tenant ID</label>
                         <input type="text" v-model="config.directory.tenantId" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm">
+                        <p v-if="fieldErrors['directory.tenantId']" class="mt-1 text-xs text-red-600">{{ fieldErrors['directory.tenantId'] }}</p>
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-600 mb-1">Client ID</label>
                         <input type="text" v-model="config.directory.clientId" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm">
+                        <p v-if="fieldErrors['directory.clientId']" class="mt-1 text-xs text-red-600">{{ fieldErrors['directory.clientId'] }}</p>
                     </div>
                      <div>
                         <label class="block text-sm font-medium text-gray-600 mb-1">Client Secret</label>
                         <input type="password" v-model="config.directory.clientSecret" autocomplete="off" placeholder="Enter new secret (leave blank to keep existing)" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm">
+                        <p v-if="fieldErrors['directory.clientSecret']" class="mt-1 text-xs text-red-600">{{ fieldErrors['directory.clientSecret'] }}</p>
                     </div>
                      <div>
                         <label class="block text-sm font-medium text-gray-600 mb-1">Entra ID field for Email</label>
@@ -298,8 +323,10 @@
                             </select>
                             <button @click="removeMapping(groupIndex)" class="ml-4 text-red-600 hover:text-red-800 text-sm flex-shrink-0">Remove Group</button>
                         </div>
-                        <label class="flex items-center gap-2 text-xs text-gray-600 pl-1" title="Also include users who are members of groups nested inside this group (any depth).">
-                            <input type="checkbox" v-model="mapping.includeNested"> Include members of nested groups
+                        <label class="flex items-center gap-2 text-sm font-medium text-gray-700 bg-white border rounded-md px-3 py-2">
+                            <input type="checkbox" v-model="mapping.includeNested">
+                            Include members of nested groups
+                            <span class="font-normal text-xs text-gray-500">(users in groups inside this group, any depth)</span>
                         </label>
 
                         <div v-for="(rule, ruleIndex) in mapping.rules" :key="ruleIndex" class="flex items-center gap-4 pl-4 border-l-2">
@@ -480,7 +507,24 @@
                             <li v-for="(w, i) in syncResultModal.warnings" :key="i">{{ w }}</li>
                         </ul>
                     </div>
-                    <div v-if="syncResultModal.preview" class="mt-4 space-y-2 text-sm">
+                    <div v-if="syncResultModal.changes && syncResultModal.changes.length" class="mt-4 text-sm">
+                        <p class="font-semibold text-gray-700 mb-2">Changes per user</p>
+                        <div class="max-h-80 overflow-y-auto border rounded">
+                            <table class="min-w-full text-xs">
+                                <thead class="bg-gray-50 text-left text-gray-500 sticky top-0"><tr><th class="px-2 py-1">Action</th><th class="px-2 py-1">User</th><th class="px-2 py-1">Details</th></tr></thead>
+                                <tbody>
+                                    <tr v-for="(c, i) in syncResultModal.changes" :key="i" class="border-t align-top">
+                                        <td class="px-2 py-1 font-semibold capitalize" :class="{ 'text-green-700': c.action === 'add', 'text-blue-700': c.action === 'update', 'text-red-700': c.action === 'deactivate', 'text-gray-500': c.action === 'skip' }">{{ c.action }}</td>
+                                        <td class="px-2 py-1 font-mono">{{ c.email }}</td>
+                                        <td class="px-2 py-1">
+                                            <div v-for="(line, j) in describeChange(c)" :key="j">{{ line }}</div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div v-if="syncResultModal.preview && !(syncResultModal.changes && syncResultModal.changes.length)" class="mt-4 space-y-2 text-sm">
                         <details v-for="kind in ['add', 'update', 'deactivate', 'skipped']" v-show="syncResultModal.preview[kind]" :key="kind" class="border rounded p-2">
                             <summary class="cursor-pointer font-semibold capitalize">{{ kind }} ({{ (syncResultModal.preview[kind] || []).length }}<span v-if="(syncResultModal.preview[kind] || []).length >= 200">+</span>)</summary>
                             <ul class="mt-2 ml-4 font-mono text-xs text-gray-700">
