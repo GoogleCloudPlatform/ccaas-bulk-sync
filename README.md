@@ -42,7 +42,7 @@ See [solution_overview.md](solution_overview.md) for how a sync works.
 
 ```bash
 npm install
-npm run build:css
+npm run build   # CSS and the precompiled Vue template (rerun after editing public/index.html)
 ALLOW_INSECURE_LOCAL_DEV=true node index.js   # http://localhost:8080
 npm test
 ```

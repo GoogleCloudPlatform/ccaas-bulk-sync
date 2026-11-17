@@ -21,12 +21,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CCaaS Bulk Synchronization Service</title>
     <link href="/output.css" rel="stylesheet">
-    <script src="/vendor/vue.global.prod.js"></script>
+    <script src="/vendor/vue.runtime.global.prod.js"></script>
     <link href="/app.css" rel="stylesheet">
 </head>
 <body class="bg-gray-100">
 
-    <div id="app" class="min-h-screen flex flex-col">
+    <div id="app" v-cloak class="min-h-screen flex flex-col">
 
         <!-- Product banner -->
         <header class="sticky top-0 z-40 bg-slate-900 text-white shadow">
@@ -651,6 +651,7 @@
 
     </div>
 
+    <script src="/app-render.js"></script>
     <script src="/app.js"></script>
 </body>
 </html>

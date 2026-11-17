@@ -78,7 +78,8 @@ jobs:
           check GET  /                 200
           check GET  /output.css       200
           check GET  /app.js           200
-          check GET  /vendor/vue.global.prod.js 200
+          check GET  /app-render.js    200
+          check GET  /vendor/vue.runtime.global.prod.js 200
           check GET  /api/config       401
           check POST /api/config       401
           check POST /api/sync         401
@@ -89,6 +90,7 @@ jobs:
           headers=$(curl -sI http://localhost:8080/)
           echo "$headers" | grep -i '^content-security-policy:.*default-src .self.' 
           if echo "$headers" | grep -i '^content-security-policy:' | grep -qiE 'unpkg|https?://'; then echo "CSP allows a third-party origin"; exit 1; fi
+          if echo "$headers" | grep -i '^content-security-policy:' | grep -qi 'unsafe-'; then echo "CSP allows unsafe-eval or unsafe-inline"; exit 1; fi
           echo "$headers" | grep -i '^x-content-type-options: nosniff'
           # The container must not run as root.
           uid=$(docker exec app id -u); echo "container uid: $uid"; [ "$uid" != "0" ]

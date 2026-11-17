@@ -35,14 +35,15 @@ const { DEFAULT_MAX_DEACTIVATIONS, DEFAULT_SYNC_OPTIONS } = require('./sync-plan
 const app = express();
 app.disable('x-powered-by');
 
-// Security headers. The UI loads only same-origin resources. Vue's in-browser
-// template compiler needs 'unsafe-eval'; there are no inline scripts or styles.
+// Security headers. The UI loads only same-origin resources. The Vue template is
+// precompiled (scripts/build-ui.js), so no 'unsafe-eval'; there are no inline
+// scripts or styles.
 app.use(helmet({
     contentSecurityPolicy: {
         useDefaults: false,
         directives: {
             defaultSrc: ["'self'"],
-            scriptSrc: ["'self'", "'unsafe-eval'"],
+            scriptSrc: ["'self'"],
             styleSrc: ["'self'"],
             imgSrc: ["'self'", 'data:'],
             fontSrc: ["'self'"],
@@ -431,9 +432,10 @@ app.get('/healthz', (req, res) => {
 
 // --- Static File Server ---
 const publicPath = path.join(__dirname, 'public');
-// Serve Vue from the installed package instead of a third-party CDN.
-const vuePath = require.resolve('vue/dist/vue.global.prod.js');
-app.get('/vendor/vue.global.prod.js', staticLimiter, (req, res) => {
+// Serve Vue's runtime-only build (no template compiler) from the installed
+// package instead of a third-party CDN.
+const vuePath = require.resolve('vue/dist/vue.runtime.global.prod.js');
+app.get('/vendor/vue.runtime.global.prod.js', staticLimiter, (req, res) => {
     res.set('Cache-Control', 'public, max-age=86400');
     res.sendFile(vuePath);
 });

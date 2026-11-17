@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased (2.0.0)
+### Security
+- **Strict Content Security Policy:** `script-src 'self'`, with no `'unsafe-eval'`. The Vue template in `public/index.html` is precompiled into `public/app-render.js` at build time (`npm run build`, `scripts/build-ui.js`), and the browser loads Vue's runtime-only build. CI fails if the CSP allows `unsafe-*`.
+
 ### Changed (sync behavior)
 - **Multiple teams:** a user joins every team from every mapping they match, the same way roles accumulate. Previously only the first matching team was applied. Changes are detected by comparing the full set of teams.
 - **Existing CCaaS users** without the sync role are now **skipped and reported**, instead of being submitted as new users (which could overwrite manual settings). New setting **Existing CCaaS Users**: `skip` (default) or `adopt`.

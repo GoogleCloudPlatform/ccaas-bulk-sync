@@ -1,5 +1,6 @@
 node_modules
 public/output.css
+public/app-render.js
 terraform/.terraform/
 terraform/.terraform.lock.hcl
 terraform/*.tfstate*
