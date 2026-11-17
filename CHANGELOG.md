@@ -9,6 +9,7 @@
 - Simulations and run history report a `skipped` count; the simulation preview lists skipped users.
 
 ### Added (UI)
+- **New layout:** a product banner (with Save, Run Sync, and the signed-in user and role) and left-hand navigation for **Configuration** (CCaaS, Sync Schedule, Directory, Group Mappings), **Jobs**, **Runs** and **Help**. Sections are linkable (`#config`, `#jobs`, `#runs`, `#help`). Cleaner cards, an updated "How Synchronization Works", a new "Safety checks" help page, and the app version in the sidebar.
 - **Simulation diff:** a per-user table showing what each change does: adds with their teams and roles; updates with + and − teams and roles and name changes; deactivations; skipped users. Returned only in simulation responses, never logged or stored.
 - **Schedule time zone** (IANA, default UTC; daylight saving time handled by Cloud Scheduler) and **validation** of the schedule type, daily time, cron expression (5 numeric fields) and poll delay on save, plus an inline cron hint.
 - **Inline form errors:** validation errors return `{message, field}` and the UI shows them next to the field.

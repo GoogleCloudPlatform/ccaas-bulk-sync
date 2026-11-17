@@ -88,6 +88,45 @@ createApp({
         };
         const syncResultModal = ref({ show: false, title: '', message: '', status: 'success', preview: null, changes: null, warnings: [], canOverride: false });
         const fieldErrors = ref({});
+        // --- Navigation ---
+        const navItems = [
+            { id: 'config', label: 'Configuration', icon: '⚙', title: 'Configuration', subtitle: 'CCaaS connection, schedule, directory and group mappings.' },
+            { id: 'jobs', label: 'Jobs', icon: '▤', title: 'Jobs', subtitle: 'Bulk user jobs submitted to CCaaS and their status.' },
+            { id: 'runs', label: 'Runs', icon: '↻', title: 'Runs', subtitle: 'Scheduled and manual syncs, simulations, and their outcomes.' },
+            { id: 'help', label: 'Help', icon: '?', title: 'Help', subtitle: 'How synchronization works and the safety checks that protect your users.' },
+        ];
+        const configSubsections = [
+            { anchor: 'cfg-ccaas', label: 'CCaaS Configuration' },
+            { anchor: 'cfg-schedule', label: 'Sync Schedule' },
+            { anchor: 'cfg-directory', label: 'Directory Configuration' },
+            { anchor: 'cfg-mappings', label: 'Group Mappings' },
+        ];
+        const sectionFromHash = () => {
+            const id = (window.location.hash || '').replace('#', '');
+            return navItems.some(n => n.id === id) ? id : 'config';
+        };
+        const activeSection = ref(sectionFromHash());
+        const currentSection = computed(() => navItems.find(n => n.id === activeSection.value) || navItems[0]);
+        const currentSectionTitle = computed(() => currentSection.value.title);
+        const currentSectionSubtitle = computed(() => currentSection.value.subtitle);
+        const appVersion = ref('');
+        const setSection = (id, anchor = null) => {
+            activeSection.value = id;
+            if (window.location.hash !== `#${id}`) history.replaceState(null, '', `#${id}`);
+            if (id === 'jobs') fetchJobs();
+            if (id === 'runs') fetchRuns();
+            setTimeout(() => {
+                if (anchor) document.getElementById(anchor)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                else window.scrollTo({ top: 0 });
+            }, 0);
+        };
+        window.addEventListener('hashchange', () => { activeSection.value = sectionFromHash(); });
+        const fetchVersion = async () => {
+            try {
+                const r = await fetch(`${window.location.origin}/healthz`);
+                if (r.ok) appVersion.value = (await r.json()).version;
+            } catch (e) { /* ignore */ }
+        };
         const timeZones = (typeof Intl.supportedValuesOf === 'function') ? ['UTC', ...Intl.supportedValuesOf('timeZone')] : ['UTC'];
         const cronLooksValid = computed(() => CRON_RE.test((config.value.schedule.cron || '').trim()));
         const reloadPage = () => window.location.reload();
@@ -567,6 +606,7 @@ createApp({
 
         onMounted(() => {
             fetchMe();
+            fetchVersion();
             fetchRuns();
             fetchConfig();
         });
@@ -591,6 +631,13 @@ createApp({
             showGcpHelpModal,
             showSyncModal,
             syncResultModal,
+            navItems,
+            configSubsections,
+            activeSection,
+            currentSectionTitle,
+            currentSectionSubtitle,
+            appVersion,
+            setSection,
             sessionExpired,
             reloadPage,
             fieldErrors,
