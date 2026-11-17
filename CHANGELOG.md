@@ -5,6 +5,7 @@
 - **Multiple teams:** a user joins every team from every mapping they match, the same way roles accumulate. Previously only the first matching team was applied. Changes are detected by comparing the full set of teams.
 - **Existing CCaaS users** without the sync role are now **skipped and reported**, instead of being submitted as new users (which could overwrite manual settings). New setting **Existing CCaaS Users**: `skip` (default) or `adopt`.
 - **Name sync:** first and last names are compared and updated from the directory (setting **Sync names**, on by default). An empty directory value never blanks a CCaaS name.
+- **Nested groups** (opt-in per mapping): include members of nested groups via AD `LDAP_MATCHING_RULE_IN_CHAIN`, Entra ID `transitiveMembers`, or Google Workspace `includeDerivedMembership`.
 - Simulations and run history report a `skipped` count; the simulation preview lists skipped users.
 
 ### Changed (architecture)

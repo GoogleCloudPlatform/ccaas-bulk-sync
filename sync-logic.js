@@ -15,7 +15,10 @@
  */
 
 const { google } = require('googleapis');
-const { Client, AndFilter, EqualityFilter } = require('ldapts');
+const { Client, AndFilter, EqualityFilter, ExtensibleFilter } = require('ldapts');
+
+// Active Directory "in chain" matching rule: matches members of nested groups too.
+const LDAP_MATCHING_RULE_IN_CHAIN = '1.2.840.113556.1.4.1941';
 const msal = require('@azure/msal-node');
 const { Client: GraphClient } = require('@microsoft/microsoft-graph-client');
 // fetch, FormData and Blob are built into Node.js 22; the Microsoft Graph
@@ -332,7 +335,7 @@ async function _mapWithConcurrency(items, limit, fn) {
     return results;
 }
 
-async function getGoogleWorkspaceGroupMembers(groupName, directoryConfig, cache = {}) {
+async function getGoogleWorkspaceGroupMembers(groupName, directoryConfig, cache = {}, { includeNested = false } = {}) {
     const admin = await getDirectoryClient(directoryConfig);
 
     // Match the group by exact name from the full group list. This avoids
@@ -358,6 +361,8 @@ async function getGoogleWorkspaceGroupMembers(groupName, directoryConfig, cache 
         const res = await admin.members.list({
             groupKey: group.id,
             maxResults: 200,
+            // Derived membership includes users who are members through nested groups.
+            includeDerivedMembership: includeNested,
             pageToken: pageToken,
         });
         if (res.data.members) {
@@ -366,6 +371,8 @@ async function getGoogleWorkspaceGroupMembers(groupName, directoryConfig, cache 
         pageToken = res.data.nextPageToken;
     } while (pageToken);
 
+    // A user can appear more than once with derived membership.
+    allMembers = [...new Map(allMembers.map(m => [m.id, m])).values()];
     const userDetailsResponses = await _mapWithConcurrency(allMembers, 10, member =>
         admin.users.get({ userKey: member.id, fields: 'name,primaryEmail' })
     );
@@ -377,7 +384,19 @@ async function getGoogleWorkspaceGroupMembers(groupName, directoryConfig, cache 
     }));
 }
 
-async function getActiveDirectoryGroupMembers(groupName, directoryConfig) {
+/** memberOf filter; with includeNested, AD's in-chain rule also matches nested group members. */
+function _adMemberOfFilter(groupDN, includeNested) {
+    return includeNested
+        ? new ExtensibleFilter({ matchType: 'memberOf', rule: LDAP_MATCHING_RULE_IN_CHAIN, value: groupDN })
+        : new EqualityFilter({ attribute: 'memberOf', value: groupDN });
+}
+
+/** Graph path for a group's users; transitiveMembers includes users in nested groups. */
+function _entraMembersPath(groupId, includeNested) {
+    return `/groups/${groupId}/${includeNested ? 'transitiveMembers' : 'members'}/microsoft.graph.user`;
+}
+
+async function getActiveDirectoryGroupMembers(groupName, directoryConfig, { includeNested = false } = {}) {
     const { url, bindDN, bindPassword, searchBase } = directoryConfig;
     const client = new Client({ url: validateLdapUrl(url) });
     try {
@@ -402,7 +421,7 @@ async function getActiveDirectoryGroupMembers(groupName, directoryConfig) {
             scope: 'sub',
             filter: new AndFilter({ filters: [
                 new EqualityFilter({ attribute: 'objectClass', value: 'user' }),
-                new EqualityFilter({ attribute: 'memberOf', value: groupDN }),
+                _adMemberOfFilter(groupDN, includeNested),
             ] }),
             attributes: ['mail', 'givenName', 'sn'],
             paged: true,
@@ -423,7 +442,7 @@ async function getActiveDirectoryGroupMembers(groupName, directoryConfig) {
     }
 }
 
-async function getEntraIdGroupMembers(groupName, directoryConfig) {
+async function getEntraIdGroupMembers(groupName, directoryConfig, { includeNested = false } = {}) {
     const graphClient = await getGraphClient(directoryConfig);
     
     const groups = await graphClient.api('/groups')
@@ -437,7 +456,7 @@ async function getEntraIdGroupMembers(groupName, directoryConfig) {
     const groupId = encodeURIComponent(groups.value[0].id);
 
     const members = await _graphGetAll(graphClient,
-        graphClient.api(`/groups/${groupId}/members/microsoft.graph.user`)
+        graphClient.api(_entraMembersPath(groupId, includeNested))
             .select('displayName,mail,givenName,surname,userPrincipalName')
             .top(999));
 
@@ -452,15 +471,16 @@ async function getEntraIdGroupMembers(groupName, directoryConfig) {
 }
 
 
-async function getDirectoryUsersByGroup(groupName, directoryConfig, cache = {}) {
-    console.log(`Fetching users for group "${groupName}" from ${directoryConfig.type}...`);
+async function getDirectoryUsersByGroup(groupName, directoryConfig, cache = {}, options = {}) {
+    const includeNested = options.includeNested === true;
+    console.log('Fetching users for group "%s" from %s%s...', groupName, directoryConfig.type, includeNested ? ' (including nested groups)' : '');
     let users = [];
     if (directoryConfig.type === 'google') {
-        users = await getGoogleWorkspaceGroupMembers(groupName, directoryConfig, cache);
+        users = await getGoogleWorkspaceGroupMembers(groupName, directoryConfig, cache, { includeNested });
     } else if (directoryConfig.type === 'ad') {
-        users = await getActiveDirectoryGroupMembers(groupName, directoryConfig);
+        users = await getActiveDirectoryGroupMembers(groupName, directoryConfig, { includeNested });
     } else if (directoryConfig.type === 'entra') {
-        users = await getEntraIdGroupMembers(groupName, directoryConfig);
+        users = await getEntraIdGroupMembers(groupName, directoryConfig, { includeNested });
     } else {
         throw new Error(`Unsupported directory type: ${directoryConfig.type}`);
     }
@@ -508,7 +528,7 @@ async function runSync(config, options = {}, deps = {}) {
     const cache = {};
     const groupResults = [];
     for (const mapping of config.mappings) {
-        const members = await fetchGroupMembers(mapping.group, config.directory, cache);
+        const members = await fetchGroupMembers(mapping.group, config.directory, cache, { includeNested: mapping.includeNested === true });
         groupResults.push({ group: mapping.group, rules: mapping.rules, members });
     }
     const { users: directoryUsers, warnings } = buildDirectoryUsers(groupResults);
@@ -642,5 +662,7 @@ module.exports = {
     // Exposed for tests.
     _graphGetAll,
     _callCcaasUploadApi,
+    _adMemberOfFilter,
+    _entraMembersPath,
 };
 
