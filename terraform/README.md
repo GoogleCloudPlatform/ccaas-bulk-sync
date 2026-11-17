@@ -26,7 +26,7 @@ terraform apply -target=google_artifact_registry_repository_iam_member.build_pus
 (cd .. && gcloud builds submit . --project=PROJECT --region=REGION \
   --config=terraform/cloudbuild-image.yaml \
   --service-account=projects/PROJECT/serviceAccounts/$(terraform -chdir=terraform output -raw build_service_account) \
-  --substitutions=_IMAGE=REGION-docker.pkg.dev/PROJECT/ccaas-sync-repo/ccaas-sync-service:v1.4.0)
+  --substitutions=_IMAGE=REGION-docker.pkg.dev/PROJECT/ccaas-sync-repo/ccaas-sync-service:v2.0.0)
 
 # 2. Deploy everything else.
 terraform apply

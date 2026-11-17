@@ -1,6 +1,6 @@
 project_id = "my-project"
 region     = "us-central1"
-image      = "us-central1-docker.pkg.dev/my-project/ccaas-sync-repo/ccaas-sync-service:v1.4.0"
+image      = "us-central1-docker.pkg.dev/my-project/ccaas-sync-repo/ccaas-sync-service:v2.0.0"
 
 # "cloud_run" (IAP directly on Cloud Run, no load balancer) or "load_balancer"
 iap_mode = "cloud_run"

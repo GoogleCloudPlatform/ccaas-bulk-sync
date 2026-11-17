@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased (2.0.0)
+## 2.0.0: Sync behavior, live syncs as a job, new UI
+
+### Upgrade notes
+1. **Run Simulate Only first.** Sync results change: users join every team from every mapping they match, existing CCaaS users without the sync role are skipped and reported (instead of being overwritten), and first and last names are synced. Expect one-off updates on the first sync. The new "Changes per user" table shows exactly what will change.
+2. **Redeploy** with Cloud Build (README step 5) or Terraform (`image` tag `v2.0.0`). This creates the `<service>-sync` Cloud Run Job, sets `SYNC_JOB_NAME`, and grants the service account permission to run it. Keep the same `_INGRESS` you use today: `all` for IAP directly on Cloud Run, or the default for a load balancer.
+3. **Alerts:** re-run `scripts/setup-alerts.sh` (or `terraform apply`) so the policies include the job's logs.
+4. **Load balancer setups:** raise the backend timeout: `gcloud compute backend-services update ccaas-sync-backend --global --timeout=300`.
+5. Hard-reload the UI after upgrading so the browser picks up the new layout and the precompiled template.
+6. Optional: set the schedule's **time zone** (default UTC), enable **nested groups** per mapping, or switch **Existing CCaaS Users** to **Adopt**.
+
 ### Security
 - **Strict Content Security Policy:** `script-src 'self'`, with no `'unsafe-eval'`. The Vue template in `public/index.html` is precompiled into `public/app-render.js` at build time (`npm run build`, `scripts/build-ui.js`), and the browser loads Vue's runtime-only build. CI fails if the CSP allows `unsafe-*`.
 
@@ -24,8 +33,6 @@
 - Run history records a run as `queued` → `running` → final outcome. The job holds the sync lock for the whole run.
 - Alert filters (script and Terraform) include the job's logs; `setup-alerts.sh` now updates existing policies and the metric in place.
 - Load balancer backend timeout raised to 300s (README and Terraform).
-
-**Upgrade impact:** expect one-off updates on the first sync for users who match several team mappings, and for users whose names differ. Run **Simulate Only** first.
 
 ### Documentation
 - The README now recommends **Terraform** and **IAP directly on Cloud Run**; the load balancer with a custom domain is documented as an alternative. Step 5 deploys with `_INGRESS=all`, IAP is step 6 and the admin allowlist is step 7.
