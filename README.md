@@ -359,7 +359,9 @@ Each sync works out which users to add, update and deactivate, then submits one 
 Other behavior to be aware of:
 - Emails are compared without regard to case.
 - Users are matched against **all** CCaaS users, across every page of results.
-- If a user matches several team mappings, only the first team is applied, and the result includes a warning.
+- **Roles and teams accumulate:** a user gets every role and joins every team from every mapping whose group they are in.
+- **Existing CCaaS users** who don't have the sync role are **skipped and reported** by default. Set **Existing CCaaS Users** to **Adopt** to give them the sync role. Their roles and teams are then set from the mappings.
+- **First and last names** are synced from the directory, and can be turned off. An empty directory name never blanks a CCaaS name.
 - Scheduled times are in UTC.
 - Logs contain only counts and job IDs, never user details.
 

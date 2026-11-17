@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased (2.0.0)
+### Changed (sync behavior)
+- **Multiple teams:** a user joins every team from every mapping they match, the same way roles accumulate. Previously only the first matching team was applied. Changes are detected by comparing the full set of teams.
+- **Existing CCaaS users** without the sync role are now **skipped and reported**, instead of being submitted as new users (which could overwrite manual settings). New setting **Existing CCaaS Users**: `skip` (default) or `adopt`.
+- **Name sync:** first and last names are compared and updated from the directory (setting **Sync names**, on by default). An empty directory value never blanks a CCaaS name.
+- Simulations and run history report a `skipped` count; the simulation preview lists skipped users.
+
+**Upgrade impact:** expect one-off updates on the first sync for users who match several team mappings, and for users whose names differ. Run **Simulate Only** first.
+
 ## 1.4.0: Operations
 
 ### Upgrade notes

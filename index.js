@@ -28,7 +28,7 @@ const { roleFor, requireAdmin, requireSyncPermission, isAdminListConfigured, war
 const { buildConfigToSave, ConfigValidationError, redactConfig } = require('./config-security');
 const { acquireSyncLock, SyncInProgressError } = require('./sync-lock');
 const runHistory = require('./run-history');
-const { SyncSafetyError, DEFAULT_MAX_DEACTIVATIONS } = require('./sync-plan');
+const { SyncSafetyError, DEFAULT_MAX_DEACTIVATIONS, DEFAULT_SYNC_OPTIONS } = require('./sync-plan');
 
 const app = express();
 app.disable('x-powered-by');
@@ -140,6 +140,7 @@ app.get('/api/config', async (req, res) => {
             mappings: [],
             schedule: { type: 'manual', time: '00:00', cron: '* * * * *', initialPollDelay: 15 },
             safety: { maxDeactivations: DEFAULT_MAX_DEACTIVATIONS },
+            syncOptions: { ...DEFAULT_SYNC_OPTIONS },
             syncRole: ''
         };
 
@@ -157,6 +158,7 @@ app.get('/api/config', async (req, res) => {
             directory: { ...defaultConfig.directory, ...storedConfig.directory },
             schedule: { ...defaultConfig.schedule, ...storedConfig.schedule },
             safety: { ...defaultConfig.safety, ...storedConfig.safety },
+            syncOptions: { ...defaultConfig.syncOptions, ...storedConfig.syncOptions },
         };
         
         // Effective Google auth mode (older configs have a key but no mode).

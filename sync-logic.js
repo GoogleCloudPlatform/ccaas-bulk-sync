@@ -514,14 +514,20 @@ async function runSync(config, options = {}, deps = {}) {
     const { users: directoryUsers, warnings } = buildDirectoryUsers(groupResults);
     console.log(`Found ${directoryUsers.size} unique users in directory groups.`);
 
-    const plan = computeSyncPlan({ directoryUsers, ccaasUsers, template, syncRole: config.syncRole });
+    const plan = computeSyncPlan({ directoryUsers, ccaasUsers, template, syncRole: config.syncRole, options: config.syncOptions || {} });
+    if (plan.usersSkipped.length > 0) {
+        warnings.push(`${plan.usersSkipped.length} directory user(s) already exist in CCaaS without the "${config.syncRole}" role and were skipped. Set "Existing CCaaS users" to "Adopt" to manage them.`);
+    }
+    if (plan.adoptedCount > 0) {
+        warnings.push(`${plan.adoptedCount} existing CCaaS user(s) will be adopted: they get the "${config.syncRole}" role, and their roles and teams will be set from the mappings.`);
+    }
     const usersToAdd = plan.usersToAdd;
     const usersToUpdate = plan.usersToUpdate;
     const usersToDelete = plan.usersToDeactivate;
-    const counts = { add: usersToAdd.length, update: usersToUpdate.length, deactivate: usersToDelete.length };
+    const counts = { add: usersToAdd.length, update: usersToUpdate.length, deactivate: usersToDelete.length, skipped: plan.usersSkipped.length };
     console.log(`Sync plan: add=${counts.add} update=${counts.update} deactivate=${counts.deactivate} (managed active=${plan.managedActiveCount}).`);
 
-    const preview = { add: _preview(usersToAdd), update: _preview(usersToUpdate), deactivate: _preview(usersToDelete) };
+    const preview = { add: _preview(usersToAdd), update: _preview(usersToUpdate), deactivate: _preview(usersToDelete), skipped: _preview(plan.usersSkipped) };
     const safety = config.safety || {};
 
     let blockedBy = null;
