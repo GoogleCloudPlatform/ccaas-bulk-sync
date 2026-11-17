@@ -548,6 +548,8 @@ async function runSync(config, options = {}, deps = {}) {
     console.log(`Sync plan: add=${counts.add} update=${counts.update} deactivate=${counts.deactivate} (managed active=${plan.managedActiveCount}).`);
 
     const preview = { add: _preview(usersToAdd), update: _preview(usersToUpdate), deactivate: _preview(usersToDelete), skipped: _preview(plan.usersSkipped) };
+    // Per-user change details for the simulation diff view (response only; not logged or stored).
+    const changes = simulate ? plan.details.slice(0, PREVIEW_LIMIT * 2) : undefined;
     const safety = config.safety || {};
 
     let blockedBy = null;
@@ -642,7 +644,7 @@ async function runSync(config, options = {}, deps = {}) {
         console.log("No users to add or update.");
     }
 
-    return { message, outcome, simulate, counts, preview, warnings, blockedBy, jobId };
+    return { message, outcome, simulate, counts, preview, changes, warnings, blockedBy, jobId };
 }
 
 

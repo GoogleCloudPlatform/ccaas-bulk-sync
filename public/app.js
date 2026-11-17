@@ -16,6 +16,27 @@
 
 const { createApp, ref, onMounted, computed } = Vue;
 
+const sessionExpired = ref(false);
+
+/**
+ * fetch() for API calls. When the IAP sign-in session has expired, IAP answers
+ * with a cross-origin redirect to Google sign-in, which fetch reports as a
+ * TypeError ("Failed to fetch"). Surface that as a clear message.
+ */
+async function apiFetch(url, options) {
+    try {
+        return await fetch(url, options);
+    } catch (error) {
+        if (error instanceof TypeError) {
+            sessionExpired.value = true;
+            throw new Error('Your sign-in session may have expired, so the request did not reach the service. Reload the page to sign in again.');
+        }
+        throw error;
+    }
+}
+
+const CRON_RE = /^(\S+\s+){4}\S+$/;
+
 createApp({
     setup() {
         const config = ref({
@@ -23,7 +44,8 @@ createApp({
             directory: {},
             mappings: [],
             schedule: {
-                initialPollDelay: 15
+                initialPollDelay: 15,
+                timeZone: 'UTC'
             },
             safety: { maxDeactivations: 25 },
             syncOptions: { existingUsers: 'skip', syncNames: true },
@@ -58,13 +80,73 @@ createApp({
         const isAdmin = computed(() => me.value.role === 'admin');
         const fetchMe = async () => {
             try {
-                const response = await fetch(`${window.location.origin}/api/me`);
+                const response = await apiFetch(`${window.location.origin}/api/me`);
                 if (response.ok) me.value = await response.json();
             } catch (error) {
                 console.error('Failed to load user info:', error);
             }
         };
-        const syncResultModal = ref({ show: false, title: '', message: '', status: 'success', preview: null, warnings: [], canOverride: false });
+        const syncResultModal = ref({ show: false, title: '', message: '', status: 'success', preview: null, changes: null, warnings: [], canOverride: false });
+        const fieldErrors = ref({});
+        // --- Navigation ---
+        const navItems = [
+            { id: 'config', label: 'Configuration', icon: '⚙', title: 'Configuration', subtitle: 'CCaaS connection, schedule, directory and group mappings.' },
+            { id: 'jobs', label: 'Jobs', icon: '▤', title: 'Jobs', subtitle: 'Bulk user jobs submitted to CCaaS and their status.' },
+            { id: 'runs', label: 'Runs', icon: '↻', title: 'Runs', subtitle: 'Scheduled and manual syncs, simulations, and their outcomes.' },
+            { id: 'help', label: 'Help', icon: '?', title: 'Help', subtitle: 'How synchronization works and the safety checks that protect your users.' },
+        ];
+        const configSubsections = [
+            { anchor: 'cfg-ccaas', label: 'CCaaS Configuration' },
+            { anchor: 'cfg-schedule', label: 'Sync Schedule' },
+            { anchor: 'cfg-directory', label: 'Directory Configuration' },
+            { anchor: 'cfg-mappings', label: 'Group Mappings' },
+        ];
+        const sectionFromHash = () => {
+            const id = (window.location.hash || '').replace('#', '');
+            return navItems.some(n => n.id === id) ? id : 'config';
+        };
+        const activeSection = ref(sectionFromHash());
+        const currentSection = computed(() => navItems.find(n => n.id === activeSection.value) || navItems[0]);
+        const currentSectionTitle = computed(() => currentSection.value.title);
+        const currentSectionSubtitle = computed(() => currentSection.value.subtitle);
+        const appVersion = ref('');
+        const setSection = (id, anchor = null) => {
+            activeSection.value = id;
+            if (window.location.hash !== `#${id}`) history.replaceState(null, '', `#${id}`);
+            if (id === 'jobs') fetchJobs();
+            if (id === 'runs') fetchRuns();
+            setTimeout(() => {
+                if (anchor) document.getElementById(anchor)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                else window.scrollTo({ top: 0 });
+            }, 0);
+        };
+        window.addEventListener('hashchange', () => { activeSection.value = sectionFromHash(); });
+        const fetchVersion = async () => {
+            try {
+                const r = await fetch(`${window.location.origin}/healthz`);
+                if (r.ok) appVersion.value = (await r.json()).version;
+            } catch (e) { /* ignore */ }
+        };
+        const timeZones = (typeof Intl.supportedValuesOf === 'function') ? ['UTC', ...Intl.supportedValuesOf('timeZone')] : ['UTC'];
+        const cronLooksValid = computed(() => CRON_RE.test((config.value.schedule.cron || '').trim()));
+        const reloadPage = () => window.location.reload();
+        const describeChange = (c) => {
+            const lines = [];
+            const list = (xs) => xs.join(', ');
+            if (c.note) lines.push(`(${c.note.replace(/_/g, ' ')})`);
+            if (c.action === 'add') {
+                if (c.teams && c.teams.length) lines.push(`Teams: ${list(c.teams)}`);
+                if (c.roles && c.roles.length) lines.push(`Roles: ${list(c.roles)}`);
+            }
+            if (c.action === 'update') {
+                if (c.teams && c.teams.added.length) lines.push(`+ Teams: ${list(c.teams.added)}`);
+                if (c.teams && c.teams.removed.length) lines.push(`- Teams: ${list(c.teams.removed)}`);
+                if (c.roles && c.roles.added.length) lines.push(`+ Roles: ${list(c.roles.added)}`);
+                if (c.roles && c.roles.removed.length) lines.push(`- Roles: ${list(c.roles.removed)}`);
+                for (const [k, v] of Object.entries(c.names || {})) lines.push(`${k === 'first_name' ? 'First name' : 'Last name'} → ${v}`);
+            }
+            return lines;
+        };
         const helpModal = ref({ show: false, title: '', content: '' });
 
         const totalPages = computed(() => {
@@ -111,7 +193,7 @@ createApp({
         const fetchConfig = async () => {
             isLoading.value = true;
             try {
-                const response = await fetch(`${window.location.origin}/api/config`);
+                const response = await apiFetch(`${window.location.origin}/api/config`);
                 if (!response.ok) {
                     const errorText = await response.text();
                     throw new Error(`Failed to fetch config: ${response.status} ${response.statusText}. Server says: ${errorText}`);
@@ -142,14 +224,17 @@ createApp({
         const saveConfig = async () => {
             isSaving.value = true;
             try {
-                const response = await fetch(`${window.location.origin}/api/config`, {
+                const response = await apiFetch(`${window.location.origin}/api/config`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(config.value)
                 });
+                fieldErrors.value = {};
                 if (!response.ok) {
-                     const errorText = await response.text();
-                    throw new Error(`Failed to save config: ${response.status} ${response.statusText}. Server says: ${errorText}`);
+                    const isJson = (response.headers.get('content-type') || '').includes('application/json');
+                    const body = isJson ? await response.json() : { message: await response.text() };
+                    if (body.field) fieldErrors.value = { [body.field]: body.message };
+                    throw new Error(body.field ? `${body.message} (see the highlighted field)` : `Failed to save configuration: ${body.message}`);
                 }
                 showStatusMessage('Configuration saved successfully. Secrets are updated.', 'success');
                 config.value.ccaas.apiKey = '';
@@ -170,7 +255,7 @@ createApp({
             while (Date.now() < deadline) {
                 await new Promise(resolve => setTimeout(resolve, 3000));
                 try {
-                    const r = await fetch(`${window.location.origin}/api/sync-runs/${encodeURIComponent(runId)}`);
+                    const r = await apiFetch(`${window.location.origin}/api/sync-runs/${encodeURIComponent(runId)}`);
                     if (r.ok) {
                         const run = await r.json();
                         if (!RUN_PENDING.includes(run.outcome)) return run;
@@ -200,7 +285,7 @@ createApp({
             syncResultModal.value.show = false;
             isSyncing.value = true;
             try {
-                const response = await fetch(`${window.location.origin}/api/sync`, {
+                const response = await apiFetch(`${window.location.origin}/api/sync`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ simulate: simulate, allowLargeDeactivation: allowLargeDeactivation })
@@ -233,6 +318,7 @@ createApp({
                     message: data.message,
                     status: data.blockedBy ? 'error' : 'success',
                     preview: data.preview || null,
+                    changes: data.changes || null,
                     warnings: data.warnings || [],
                     canOverride: false
                 };
@@ -261,7 +347,7 @@ createApp({
             }
             isFetchingDetails.value = true;
             try {
-                const response = await fetch(`${window.location.origin}/api/ccaas-details`, {
+                const response = await apiFetch(`${window.location.origin}/api/ccaas-details`, {
                     method: 'POST'
                 });
                 if (!response.ok) {
@@ -280,7 +366,7 @@ createApp({
         const getDirectoryGroups = async () => {
             isFetchingGroups.value = true;
             try {
-                const response = await fetch(`${window.location.origin}/api/directory-groups`, {
+                const response = await apiFetch(`${window.location.origin}/api/directory-groups`, {
                     method: 'POST'
                 });
                 if (!response.ok) {
@@ -305,7 +391,7 @@ createApp({
                 };
                 if (!payload.apiKey) delete payload.apiKey;
 
-                const response = await fetch(`${window.location.origin}/api/ccaas-test`, {
+                const response = await apiFetch(`${window.location.origin}/api/ccaas-test`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
@@ -328,7 +414,7 @@ createApp({
                 if (!payload.gcpKey) delete payload.gcpKey;
                 if (!payload.bindPassword) delete payload.bindPassword;
 
-                const response = await fetch(`${window.location.origin}/api/directory-test`, {
+                const response = await apiFetch(`${window.location.origin}/api/directory-test`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
@@ -355,7 +441,7 @@ createApp({
         const fetchRuns = async () => {
             isLoadingRuns.value = true;
             try {
-                const response = await fetch(`${window.location.origin}/api/sync-runs?limit=20`);
+                const response = await apiFetch(`${window.location.origin}/api/sync-runs?limit=20`);
                 if (response.ok) runs.value = await response.json();
             } catch (error) {
                 console.error('Failed to load sync runs:', error);
@@ -374,7 +460,7 @@ createApp({
         const fetchJobs = async () => {
             isLoadingJobs.value = true;
             try {
-                const response = await fetch(`${window.location.origin}/api/ccaas-jobs`, { method: 'POST' });
+                const response = await apiFetch(`${window.location.origin}/api/ccaas-jobs`, { method: 'POST' });
                 if (!response.ok) {
                      const errorText = await response.text();
                     throw new Error(`Failed to fetch jobs: ${response.status} ${response.statusText}. Server says: ${errorText}`);
@@ -393,7 +479,7 @@ createApp({
         const proceedJob = async (jobId) => {
             isProcessingJob.value = jobId;
             try {
-                const response = await fetch(`${window.location.origin}/api/ccaas-jobs/proceed`, {
+                const response = await apiFetch(`${window.location.origin}/api/ccaas-jobs/proceed`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ jobId: jobId })
@@ -447,7 +533,7 @@ createApp({
 
             isFetchingSchemeErrors.value = jobId;
             try {
-                const response = await fetch(`${window.location.origin}/api/ccaas-jobs/scheme-errors/${jobId}`);
+                const response = await apiFetch(`${window.location.origin}/api/ccaas-jobs/scheme-errors/${jobId}`);
                 if (!response.ok) {
                      throw new Error('Failed to fetch scheme errors.');
                 }
@@ -520,6 +606,7 @@ createApp({
 
         onMounted(() => {
             fetchMe();
+            fetchVersion();
             fetchRuns();
             fetchConfig();
         });
@@ -544,6 +631,19 @@ createApp({
             showGcpHelpModal,
             showSyncModal,
             syncResultModal,
+            navItems,
+            configSubsections,
+            activeSection,
+            currentSectionTitle,
+            currentSectionSubtitle,
+            appVersion,
+            setSection,
+            sessionExpired,
+            reloadPage,
+            fieldErrors,
+            timeZones,
+            cronLooksValid,
+            describeChange,
             runs,
             isLoadingRuns,
             fetchRuns,

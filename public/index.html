@@ -24,30 +24,44 @@
     <script src="/vendor/vue.global.prod.js"></script>
     <link href="/app.css" rel="stylesheet">
 </head>
-<body class="bg-gray-50">
+<body class="bg-gray-100">
 
-    <div id="app" class="max-w-4xl mx-auto p-4 md:p-8 space-y-8">
-        
-        <!-- Floating Action Toolbox -->
-        <div class="fixed left-4 top-1/2 -translate-y-1/2 bg-white p-3 rounded-xl shadow-lg border border-gray-200 space-y-3 z-50">
-            <button @click="saveConfig" :disabled="isSaving || !isAdmin" :title="isAdmin ? 'Save Configuration' : 'Only administrators can save'" class="w-12 h-12 flex items-center justify-center bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-75 disabled:opacity-50 disabled:cursor-wait">
-                <svg v-if="!isSaving" xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
-                </svg>
-                <svg v-else class="animate-spin h-6 w-6 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-            </button>
-            <button @click="showSyncModal = true" :disabled="isSyncing" title="Run Sync Now" class="w-12 h-12 flex items-center justify-center bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-75 disabled:opacity-50 disabled:cursor-wait">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" :class="{'animate-spin': isSyncing}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h5m11 2a9 9 0 11-2.923-6.386" />
-                </svg>
-            </button>
+    <div id="app" class="min-h-screen flex flex-col">
+
+        <!-- Product banner -->
+        <header class="sticky top-0 z-40 bg-slate-900 text-white shadow">
+            <div class="h-14 px-4 flex items-center justify-between gap-4">
+                <div class="flex items-center gap-3 min-w-0">
+                    <div class="h-8 w-8 rounded-md bg-blue-600 flex items-center justify-center flex-shrink-0" aria-hidden="true">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h5m11 2a9 9 0 11-2.923-6.386" /></svg>
+                    </div>
+                    <div class="min-w-0">
+                        <div class="font-semibold leading-tight truncate">CCaaS Bulk Sync</div>
+                        <div class="text-xs text-slate-400 leading-tight truncate">Directory to CCaaS user synchronization</div>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button v-show="activeSection === 'config'" @click="saveConfig" :disabled="isSaving || !isAdmin" :title="isAdmin ? 'Save configuration' : 'Only administrators can save'" class="px-3 py-1.5 text-sm font-semibold rounded-md bg-blue-600 hover:bg-blue-500 disabled:opacity-50">{{ isSaving ? 'Saving…' : 'Save' }}</button>
+                    <button @click="showSyncModal = true" :disabled="isSyncing" class="px-3 py-1.5 text-sm font-semibold rounded-md bg-green-600 hover:bg-green-500 disabled:opacity-50 flex items-center gap-1">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" :class="{ 'animate-spin': isSyncing }" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h5m11 2a9 9 0 11-2.923-6.386" /></svg>
+                        {{ isSyncing ? 'Syncing…' : 'Run Sync' }}
+                    </button>
+                    <div v-if="me.email" class="hidden md:flex items-center gap-2 pl-3 ml-1 border-l border-slate-700 text-xs">
+                        <span class="text-slate-300 truncate max-w-48">{{ me.email }}</span>
+                        <span class="px-2 py-0.5 rounded-full font-semibold" :class="isAdmin ? 'bg-blue-500/20 text-blue-200' : 'bg-slate-700 text-slate-200'">{{ isAdmin ? 'Admin' : 'Viewer' }}</span>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Session expired banner -->
+        <div v-if="sessionExpired" class="fixed top-0 inset-x-0 z-50 bg-yellow-100 border-b border-yellow-400 text-yellow-900 text-sm px-4 py-2 flex items-center justify-center gap-4" role="alert">
+            <span>Your sign-in session may have expired, so the last request didn't reach the service.</span>
+            <button @click="reloadPage" class="px-3 py-1 bg-yellow-600 text-white rounded font-semibold hover:bg-yellow-700">Reload and sign in</button>
         </div>
-        
+
         <!-- Global Status Message Toast -->
-        <div class="fixed top-5 left-1/2 -translate-x-1/2 z-50">
+        <div class="fixed top-16 right-4 z-50 max-w-md">
              <transition name="fade">
                 <div v-if="statusMessage.text" :class="statusMessage.type === 'success' ? 'bg-green-100 border-green-400 text-green-700' : 'bg-red-100 border-red-400 text-red-700'" class="border px-6 py-3 rounded-lg shadow-lg" role="alert">
                     <strong v-if="statusMessage.title" class="font-bold">{{ statusMessage.title }}</strong>
@@ -57,55 +71,75 @@
         </div>
 
 
-        <header class="text-center">
-            <h1 class="text-3xl font-bold text-gray-800">CCaaS Bulk Synchronization Service</h1>
-            <p v-if="me.email" class="mt-1 text-sm text-gray-500">Signed in as {{ me.email }} <span class="ml-1 px-2 py-0.5 rounded-full text-xs font-semibold" :class="isAdmin ? 'bg-blue-100 text-blue-800' : 'bg-gray-200 text-gray-700'">{{ isAdmin ? 'Admin' : 'Viewer (read-only)' }}</span></p>
-            <p v-if="me.email && !me.adminListConfigured" class="mt-2 mx-auto max-w-2xl text-xs bg-yellow-50 border border-yellow-300 text-yellow-900 rounded p-2">ADMIN_EMAILS is not configured, so every user with IAP access is an administrator. Set ADMIN_EMAILS on the Cloud Run service to restrict changes.</p>
-            <p class="text-md text-gray-500 mt-2">Configure and manage user synchronization between your directory service and CCaaS.</p>
-        </header>
+        <div class="flex flex-1">
+            <!-- Side navigation -->
+            <nav class="w-56 flex-shrink-0 bg-white border-r border-gray-200 sticky top-14 self-start h-[calc(100vh-3.5rem)] overflow-y-auto flex flex-col" aria-label="Sections">
+                <div class="p-3 space-y-1 text-sm flex-1">
+                    <template v-for="item in navItems" :key="item.id">
+                        <button @click="setSection(item.id)" class="w-full text-left px-3 py-2 rounded-md flex items-center gap-2" :class="activeSection === item.id ? 'bg-blue-50 text-blue-700 font-semibold' : 'text-gray-700 hover:bg-gray-100'" :aria-current="activeSection === item.id ? 'page' : null">
+                            <span class="w-4 text-center" aria-hidden="true">{{ item.icon }}</span>{{ item.label }}
+                        </button>
+                        <div v-if="item.id === 'config' && activeSection === 'config'" class="ml-6 mb-1 space-y-0.5 border-l border-gray-200">
+                            <button v-for="sub in configSubsections" :key="sub.anchor" @click="setSection('config', sub.anchor)" class="w-full text-left pl-3 pr-2 py-1 text-xs text-gray-600 hover:text-blue-700">{{ sub.label }}</button>
+                        </div>
+                    </template>
+                </div>
+                <div class="p-3 text-xs text-gray-400 border-t">v{{ appVersion || '…' }}</div>
+            </nav>
 
-        <!-- How Synchronization Works Panel -->
-        <div class="bg-white p-6 rounded-xl shadow-lg space-y-4">
-            <div class="flex justify-between items-center border-b pb-2">
-                <h2 class="text-xl font-bold text-gray-700">How Synchronization Works</h2>
+            <!-- Content -->
+            <main class="flex-1 min-w-0 p-6">
+                <div class="max-w-5xl mx-auto space-y-6">
+                    <div>
+                        <h1 class="text-xl font-semibold text-gray-900">{{ currentSectionTitle }}</h1>
+                        <p class="text-sm text-gray-500">{{ currentSectionSubtitle }}</p>
+                    </div>
+                    <p v-if="me.email && !me.adminListConfigured" class="text-xs bg-yellow-50 border border-yellow-300 text-yellow-900 rounded-md p-3">ADMIN_EMAILS is not configured, so every user with IAP access is an administrator. Set ADMIN_EMAILS on the Cloud Run service to restrict changes.</p>
+
+        <!-- Help -->
+        <section v-show="activeSection === 'help'" class="space-y-6">
+            <div class="bg-white p-6 rounded-lg border border-gray-200 shadow-sm space-y-4">
+                <h2 class="text-lg font-semibold text-gray-800">How Synchronization Works</h2>
+                <ol class="list-decimal list-outside ml-5 space-y-3 text-sm text-gray-700">
+                    <li><strong>Managed users.</strong> CCaaS users who have the <em>User Sync Custom Role</em> are managed by this service. Users without it are never changed or deactivated.</li>
+                    <li><strong>Directory users.</strong> The service reads the members of every mapped directory group (optionally including members of nested groups) from Google Workspace, Active Directory or Microsoft Entra ID.</li>
+                    <li><strong>Roles and teams accumulate.</strong> A user gets every role and joins every team from every mapping whose group they are in.</li>
+                    <li><strong>Adds.</strong> Directory users who aren't in CCaaS, or whose managed account is inactive, are added with the sync role and their mapped roles and teams.</li>
+                    <li><strong>Updates.</strong> Managed users whose roles, teams or names differ from the directory are updated.</li>
+                    <li><strong>Deactivations.</strong> Active managed users who are no longer in any mapped group are deactivated.</li>
+                    <li><strong>Existing users.</strong> Directory users who already exist in CCaaS without the sync role are skipped and reported, or adopted if <em>Existing CCaaS Users</em> is set to Adopt.</li>
+                    <li><strong>Submit.</strong> All changes are submitted as one CCaaS bulk job, which is validated, processed and tracked under <em>Jobs</em> and <em>Runs</em>.</li>
+                </ol>
             </div>
-            <ol class="list-decimal list-inside space-y-2 text-sm text-gray-600">
-                <li>
-                    <strong>Identify Managed Users:</strong> The process begins by fetching all users from CCaaS who have the selected "User Sync Custom Role". This forms the "current user list".
-                </li>
-                <li>
-                    <strong>Build Directory List:</strong> It then gathers all users from every directory group defined in the "Group Mappings" section. This creates a comprehensive "directory user list" of everyone who *should* exist in CCaaS.
-                </li>
-                <li>
-                    <strong>Process Additions:</strong> The system compares the two lists. Any user in the directory list but not in the current CCaaS list (or who is 'Inactive' in CCaaS) is added to an "add" list.
-                </li>
-                <li>
-                    <strong>Process Deactivations:</strong> Any user in the current CCaaS list who is 'Active' but is *not* found in the directory list is added to a "deactivate" list.
-                </li>
-                <li>
-                    <strong>Process Updates:</strong> For users in both lists, the system compares their assigned teams and roles. If there's a mismatch, the user is added to an "update" list with the correct assignments.
-                </li>
-                <li>
-                    <strong>Submit Changes:</strong> Finally, the "add", "deactivate", and "update" lists are combined into a single request and submitted to the CCaaS Bulk API to apply all changes at once.
-                </li>
-            </ol>
-        </div>
+            <div class="bg-white p-6 rounded-lg border border-gray-200 shadow-sm space-y-3">
+                <h2 class="text-lg font-semibold text-gray-800">Safety checks</h2>
+                <ul class="list-disc list-outside ml-5 space-y-2 text-sm text-gray-700">
+                    <li>A sync stops if a mapped group can't be found, or if the directory returns no users at all.</li>
+                    <li><em>Max Deactivations per Sync</em> blocks scheduled syncs that would deactivate more users than the limit; manual syncs ask for confirmation.</li>
+                    <li>Only one live sync runs at a time. Use <em>Simulate Only</em> to preview every change before applying it.</li>
+                </ul>
+            </div>
+        </section>
 
+        <!-- Configuration -->
+        <section v-show="activeSection === 'config'" class="space-y-6">
         <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
             <!-- CCaaS Configuration -->
-            <div class="bg-white p-6 rounded-xl shadow-lg">
+            <div id="cfg-ccaas" class="scroll-mt-20 bg-white p-6 rounded-lg border border-gray-200 shadow-sm">
               <form @submit.prevent class="space-y-6">
                 <div class="flex justify-between items-center border-b pb-2">
-                    <h2 class="text-xl font-bold text-gray-700">CCaaS Configuration</h2>
+                    <h2 class="text-lg font-semibold text-gray-800">CCaaS Configuration</h2>
                     <span @click="showHelp('CCaaS Configuration', 'Provide the host name for the CCaaS instance. You will need to also get an API key by going to Settings -> Developer Settings -> API Credentials. Once you have entered the CCaaS host name and an API key, you can click the Test Connection button to verify if the configuration is correct.')" class="cursor-pointer text-blue-500 font-bold rounded-full w-6 h-6 flex items-center justify-center bg-blue-100 hover:bg-blue-200">?</span>
                 </div>
                 <div>
                     <label for="ccaas-host" class="block text-sm font-medium text-gray-600 mb-1">CCaaS Host</label>
                     <input type="text" id="ccaas-host" v-model="config.ccaas.host" @input="parseCcaasHost" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    <p v-if="fieldErrors['ccaas.host']" class="mt-1 text-xs text-red-600">{{ fieldErrors['ccaas.host'] }}</p>
                 </div>
                 <div>
                     <label for="ccaas-apikey" class="block text-sm font-medium text-gray-600 mb-1">API Key</label>
                     <input type="password" id="ccaas-apikey" v-model="config.ccaas.apiKey" autocomplete="off" placeholder="Enter new key (leave blank to keep existing)" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    <p v-if="fieldErrors['ccaas.apiKey']" class="mt-1 text-xs text-red-600">{{ fieldErrors['ccaas.apiKey'] }}</p>
                 </div>
                 <div class="flex items-center justify-start gap-4">
                      <button @click="testCcaasConnection" :disabled="isTestingConnection || !isAdmin" class="px-4 py-2 text-sm bg-gray-200 text-gray-700 font-semibold rounded-lg hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400 disabled:opacity-50">
@@ -119,9 +153,9 @@
             </div>
 
             <!-- Sync Schedule -->
-            <div class="bg-white p-6 rounded-xl shadow-lg space-y-6">
+            <div id="cfg-schedule" class="scroll-mt-20 bg-white p-6 rounded-lg border border-gray-200 shadow-sm space-y-6">
                 <div class="flex justify-between items-center border-b pb-2">
-                    <h2 class="text-xl font-bold text-gray-700">Sync Schedule</h2>
+                    <h2 class="text-lg font-semibold text-gray-800">Sync Schedule</h2>
                     <span @click="showHelp('Sync Schedule', 'Select the schedule for when the synchronization should be run. You can choose every hour, every day, a custom cron schedule, or manual. If manual is selected no automatic running will occur.')" class="cursor-pointer text-blue-500 font-bold rounded-full w-6 h-6 flex items-center justify-center bg-blue-100 hover:bg-blue-200">?</span>
                 </div>
                 <div>
@@ -133,23 +167,35 @@
                         <option value="custom">Custom (Cron)</option>
                     </select>
                 </div>
+                <div v-if="config.schedule.type !== 'manual'">
+                    <label class="block text-sm font-medium text-gray-600 mb-1">Time Zone</label>
+                    <input type="text" list="time-zones" v-model="config.schedule.timeZone" placeholder="UTC" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm">
+                    <datalist id="time-zones"><option v-for="tz in timeZones" :key="tz" :value="tz"></option></datalist>
+                    <p v-if="fieldErrors['schedule.timeZone']" class="mt-1 text-xs text-red-600">{{ fieldErrors['schedule.timeZone'] }}</p>
+                    <p class="mt-1 text-xs text-gray-500">IANA time zone for the schedule, e.g. Europe/London or America/New_York. Daylight saving time is handled automatically.</p>
+                </div>
                 <div v-if="config.schedule.type === 'daily'">
-                    <label class="block text-sm font-medium text-gray-600 mb-1">Time (UTC)</label>
+                    <label class="block text-sm font-medium text-gray-600 mb-1">Time ({{ config.schedule.timeZone || 'UTC' }})</label>
                     <input type="time" v-model="config.schedule.time" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    <p v-if="fieldErrors['schedule.time']" class="mt-1 text-xs text-red-600">{{ fieldErrors['schedule.time'] }}</p>
                 </div>
                  <div v-if="config.schedule.type === 'custom'">
                     <label class="block text-sm font-medium text-gray-600 mb-1">Cron Schedule</label>
                     <input type="text" v-model="config.schedule.cron" placeholder="* * * * *" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm font-mono text-sm">
-                    <p class="mt-1 text-xs text-gray-500">Enter a valid <a href="https://cloud.google.com/scheduler/docs/configuring/cron-job-schedules" target="_blank" class="text-blue-600 hover:underline">cron schedule string</a>.</p>
+                    <p v-if="fieldErrors['schedule.cron']" class="mt-1 text-xs text-red-600">{{ fieldErrors['schedule.cron'] }}</p>
+                    <p v-if="config.schedule.cron && !cronLooksValid" class="mt-1 text-xs text-red-600">This doesn't look like a 5-field cron expression (minute hour day-of-month month day-of-week).</p>
+                    <p class="mt-1 text-xs text-gray-500">Enter a valid <a href="https://cloud.google.com/scheduler/docs/configuring/cron-job-schedules" target="_blank" rel="noopener" class="text-blue-600 hover:underline">cron schedule string</a>, e.g. <span class="font-mono">0 6 * * 1-5</span>.</p>
                 </div>
                  <div>
                     <label class="block text-sm font-medium text-gray-600 mb-1">Initial Poll Delay (seconds)</label>
                     <input type="number" v-model.number="config.schedule.initialPollDelay" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm">
+                    <p v-if="fieldErrors['schedule.initialPollDelay']" class="mt-1 text-xs text-red-600">{{ fieldErrors['schedule.initialPollDelay'] }}</p>
                     <p class="mt-1 text-xs text-gray-500">Wait time after upload before checking job status.</p>
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-600 mb-1">Max Deactivations per Sync</label>
                     <input type="number" min="0" step="1" v-model.number="config.safety.maxDeactivations" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm">
+                    <p v-if="fieldErrors['safety.maxDeactivations']" class="mt-1 text-xs text-red-600">{{ fieldErrors['safety.maxDeactivations'] }}</p>
                     <p class="mt-1 text-xs text-gray-500">Safety limit. A sync that would deactivate more users than this is blocked (scheduled runs always; manual runs ask for confirmation). Use 0 to block all deactivations.</p>
                 </div>
                 <div>
@@ -167,10 +213,10 @@
         </div>
 
         <!-- Directory Configuration -->
-        <div class="bg-white p-6 rounded-xl shadow-lg">
+        <div id="cfg-directory" class="scroll-mt-20 bg-white p-6 rounded-lg border border-gray-200 shadow-sm">
           <form @submit.prevent class="space-y-8">
             <div class="flex justify-between items-center border-b pb-2">
-                <h2 class="text-xl font-bold text-gray-700">Directory Configuration</h2>
+                <h2 class="text-lg font-semibold text-gray-800">Directory Configuration</h2>
                 <span @click="showHelp('Directory Configuration', 'Select the CCaaS custom role that will be used to identify users that are being managed by the bulk user sync tool. You can create a custom role in CCaaS and assign minimum permissions such as User Profile -> User Information. Select the Directory Type, either Workspace Group or Microsoft Entra ID, and then provide the necessary information to access the directory.')" class="cursor-pointer text-blue-500 font-bold rounded-full w-6 h-6 flex items-center justify-center bg-blue-100 hover:bg-blue-200">?</span>
             </div>
             
@@ -228,6 +274,7 @@
                     <div>
                         <label class="block text-sm font-medium text-gray-600 mb-1">LDAP URL (e.g., ldap://dc.example.com)</label>
                         <input type="text" v-model="config.directory.url" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm">
+                        <p v-if="fieldErrors['directory.url']" class="mt-1 text-xs text-red-600">{{ fieldErrors['directory.url'] }}</p>
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-600 mb-1">Bind DN (e.g., cn=admin,dc=example,dc=com)</label>
@@ -236,6 +283,7 @@
                     <div>
                         <label class="block text-sm font-medium text-gray-600 mb-1">Bind Password</label>
                         <input type="password" v-model="config.directory.bindPassword" autocomplete="off" placeholder="Enter new password (leave blank to keep existing)" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm">
+                        <p v-if="fieldErrors['directory.bindPassword']" class="mt-1 text-xs text-red-600">{{ fieldErrors['directory.bindPassword'] }}</p>
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-600 mb-1">Search Base (e.g., ou=users,dc=example,dc=com)</label>
@@ -246,14 +294,17 @@
                     <div>
                         <label class="block text-sm font-medium text-gray-600 mb-1">Tenant ID</label>
                         <input type="text" v-model="config.directory.tenantId" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm">
+                        <p v-if="fieldErrors['directory.tenantId']" class="mt-1 text-xs text-red-600">{{ fieldErrors['directory.tenantId'] }}</p>
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-600 mb-1">Client ID</label>
                         <input type="text" v-model="config.directory.clientId" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm">
+                        <p v-if="fieldErrors['directory.clientId']" class="mt-1 text-xs text-red-600">{{ fieldErrors['directory.clientId'] }}</p>
                     </div>
                      <div>
                         <label class="block text-sm font-medium text-gray-600 mb-1">Client Secret</label>
                         <input type="password" v-model="config.directory.clientSecret" autocomplete="off" placeholder="Enter new secret (leave blank to keep existing)" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm">
+                        <p v-if="fieldErrors['directory.clientSecret']" class="mt-1 text-xs text-red-600">{{ fieldErrors['directory.clientSecret'] }}</p>
                     </div>
                      <div>
                         <label class="block text-sm font-medium text-gray-600 mb-1">Entra ID field for Email</label>
@@ -274,9 +325,9 @@
         </div>
         
         <!-- Group Mappings -->
-        <div class="bg-white p-6 rounded-xl shadow-lg space-y-8">
+        <div id="cfg-mappings" class="scroll-mt-20 bg-white p-6 rounded-lg border border-gray-200 shadow-sm space-y-8">
             <div class="flex justify-between items-center border-b pb-2">
-                <h2 class="text-xl font-bold text-gray-700">Group Mappings</h2>
+                <h2 class="text-lg font-semibold text-gray-800">Group Mappings</h2>
                 <span @click="showHelp('Group Mappings', 'Specify the mappings for a specific directory group by first of all selecting a directory group. Add a role mapping to specify the CCaaS role that the users of this directory group should have. Add a team mapping to specify the CCaaS team that the users should be a member of. Each directory group can have multiple role and team mappings.')" class="cursor-pointer text-blue-500 font-bold rounded-full w-6 h-6 flex items-center justify-center bg-blue-100 hover:bg-blue-200">?</span>
             </div>
             <div>
@@ -298,8 +349,10 @@
                             </select>
                             <button @click="removeMapping(groupIndex)" class="ml-4 text-red-600 hover:text-red-800 text-sm flex-shrink-0">Remove Group</button>
                         </div>
-                        <label class="flex items-center gap-2 text-xs text-gray-600 pl-1" title="Also include users who are members of groups nested inside this group (any depth).">
-                            <input type="checkbox" v-model="mapping.includeNested"> Include members of nested groups
+                        <label class="flex items-center gap-2 text-sm font-medium text-gray-700 bg-white border rounded-md px-3 py-2">
+                            <input type="checkbox" v-model="mapping.includeNested">
+                            Include members of nested groups
+                            <span class="font-normal text-xs text-gray-500">(users in groups inside this group, any depth)</span>
                         </label>
 
                         <div v-for="(rule, ruleIndex) in mapping.rules" :key="ruleIndex" class="flex items-center gap-4 pl-4 border-l-2">
@@ -328,10 +381,14 @@
             </div>
         </div>
         
+        </section>
+
+        <!-- Jobs -->
+        <section v-show="activeSection === 'jobs'" class="space-y-6">
         <!-- CCaaS Jobs Section -->
-        <div class="bg-white p-6 rounded-xl shadow-lg space-y-6">
+        <div class="bg-white p-6 rounded-lg border border-gray-200 shadow-sm space-y-6">
             <div class="flex justify-between items-center border-b pb-2">
-                <h2 class="text-xl font-bold text-gray-700">CCaaS Bulk Jobs</h2>
+                <h2 class="text-lg font-semibold text-gray-800">CCaaS Bulk Jobs</h2>
                  <span @click="showHelp('CCaaS Bulk Jobs', 'Each synchronization activity is a bulk job and each job has a unique ID. The information provided shows the status and details for each job.')" class="cursor-pointer text-blue-500 font-bold rounded-full w-6 h-6 flex items-center justify-center bg-blue-100 hover:bg-blue-200">?</span>
             </div>
             <div class="flex justify-end">
@@ -427,10 +484,14 @@
             </div>
         </div>
 
+        </section>
+
+        <!-- Runs -->
+        <section v-show="activeSection === 'runs'" class="space-y-6">
         <!-- Sync Run History -->
-        <div class="bg-white p-6 rounded-xl shadow-lg">
+        <div class="bg-white p-6 rounded-lg border border-gray-200 shadow-sm">
             <div class="flex justify-between items-center mb-4">
-                <h2 class="text-xl font-semibold text-gray-700">Recent Sync Runs</h2>
+                <h2 class="text-lg font-semibold text-gray-800">Recent Sync Runs</h2>
                 <button @click="fetchRuns" :disabled="isLoadingRuns" class="px-3 py-1 text-xs bg-gray-200 text-gray-700 font-semibold rounded-lg hover:bg-gray-300 disabled:opacity-50">Refresh</button>
             </div>
             <p v-if="!runs.length" class="text-sm text-gray-500">No sync runs recorded yet.</p>
@@ -452,6 +513,12 @@
                     </tbody>
                 </table>
             </div>
+        </div>
+
+        </section>
+
+                </div>
+            </main>
         </div>
 
         <!-- Modals -->
@@ -480,7 +547,24 @@
                             <li v-for="(w, i) in syncResultModal.warnings" :key="i">{{ w }}</li>
                         </ul>
                     </div>
-                    <div v-if="syncResultModal.preview" class="mt-4 space-y-2 text-sm">
+                    <div v-if="syncResultModal.changes && syncResultModal.changes.length" class="mt-4 text-sm">
+                        <p class="font-semibold text-gray-700 mb-2">Changes per user</p>
+                        <div class="max-h-80 overflow-y-auto border rounded">
+                            <table class="min-w-full text-xs">
+                                <thead class="bg-gray-50 text-left text-gray-500 sticky top-0"><tr><th class="px-2 py-1">Action</th><th class="px-2 py-1">User</th><th class="px-2 py-1">Details</th></tr></thead>
+                                <tbody>
+                                    <tr v-for="(c, i) in syncResultModal.changes" :key="i" class="border-t align-top">
+                                        <td class="px-2 py-1 font-semibold capitalize" :class="{ 'text-green-700': c.action === 'add', 'text-blue-700': c.action === 'update', 'text-red-700': c.action === 'deactivate', 'text-gray-500': c.action === 'skip' }">{{ c.action }}</td>
+                                        <td class="px-2 py-1 font-mono">{{ c.email }}</td>
+                                        <td class="px-2 py-1">
+                                            <div v-for="(line, j) in describeChange(c)" :key="j">{{ line }}</div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div v-if="syncResultModal.preview && !(syncResultModal.changes && syncResultModal.changes.length)" class="mt-4 space-y-2 text-sm">
                         <details v-for="kind in ['add', 'update', 'deactivate', 'skipped']" v-show="syncResultModal.preview[kind]" :key="kind" class="border rounded p-2">
                             <summary class="cursor-pointer font-semibold capitalize">{{ kind }} ({{ (syncResultModal.preview[kind] || []).length }}<span v-if="(syncResultModal.preview[kind] || []).length >= 200">+</span>)</summary>
                             <ul class="mt-2 ml-4 font-mono text-xs text-gray-700">
