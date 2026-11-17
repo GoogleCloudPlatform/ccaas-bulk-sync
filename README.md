@@ -4,12 +4,39 @@ Keeps users in Google Cloud Contact Center as a Service (CCaaS) in sync with gro
 
 It runs on Cloud Run, stores its configuration in Firestore and its credentials in Secret Manager, uses Cloud Scheduler for scheduled syncs, and is protected by Identity-Aware Proxy (IAP).
 
+- [Architecture](#architecture)
 - [Local development](#local-development)
-- [Deployment](#deployment) (load balancer + IAP, or [IAP directly on Cloud Run](#option-b-iap-directly-on-cloud-run-no-load-balancer))
+- [Deployment](#deployment): [Terraform](terraform/README.md) (recommended) or manual steps, with IAP directly on Cloud Run; [load balancer and custom domain](#alternative-load-balancer-and-custom-domain) as an alternative
 - [Monitoring and alerts](#monitoring-and-alerts)
 - [Sync safety](#sync-safety)
 - [Upgrading](#upgrading)
 - [Appendix: Microsoft Entra ID setup](#appendix-microsoft-entra-id-setup)
+
+## Architecture
+
+```mermaid
+flowchart LR
+  admin["Admins and viewers (browser)"] -->|"sign in"| iap["Identity-Aware Proxy"]
+  sched["Cloud Scheduler"] -->|"OIDC token, POST /api/sync"| iap
+  iap --> svc["Cloud Run service: UI and API"]
+  svc -->|"live sync: start run"| job["Cloud Run Job: sync worker"]
+  svc --> fs[("Firestore: config, run history, lock")]
+  job --> fs
+  svc --> sm[("Secret Manager: credentials")]
+  job --> sm
+  svc -->|"create or update job"| sched
+  job --> dir["Directory: Google Workspace, Active Directory or Entra ID"]
+  job --> ccaas["CCaaS bulk update API"]
+  svc -->|"simulate"| dir
+  svc -->|"simulate"| ccaas
+```
+
+- The **Cloud Run service** serves the UI and the API. Every API request must carry IAP's signed header; changes need an admin (`ADMIN_EMAILS`).
+- **Simulations** run in the service and change nothing. **Live syncs** run in the **Cloud Run Job** `<service>-sync`, so a long sync isn't cut off by the roughly 30-second limit on browser requests through IAP. The UI follows the run's progress.
+- **Cloud Scheduler** triggers scheduled syncs through IAP. The service creates and updates the scheduler job when you save the schedule.
+- **Firestore** holds the configuration (with secret references only), the run history and a lock so only one sync runs at a time. **Secret Manager** holds the credentials.
+
+See [solution_overview.md](solution_overview.md) for how a sync works.
 
 ## Local development
 
@@ -20,11 +47,17 @@ ALLOW_INSECURE_LOCAL_DEV=true node index.js   # http://localhost:8080
 npm test
 ```
 
-> **Note:** All `/api/*` routes require an authenticated caller (see [step 7](#7-secure-the-application-with-iap)). `ALLOW_INSECURE_LOCAL_DEV=true` turns this check off for local development only, and is ignored when running on Cloud Run.
+> **Note:** All `/api/*` routes require an authenticated caller (see [step 6](#6-secure-the-application-with-iap)). `ALLOW_INSECURE_LOCAL_DEV=true` turns this check off for local development only, and is ignored when running on Cloud Run.
 
 ## Deployment
 
-> **Prefer Terraform?** [`terraform/`](terraform/README.md) deploys everything below, in either IAP mode, with the same least-privilege setup.
+Choose one:
+
+| Path | When to use it |
+|---|---|
+| **[Terraform](terraform/README.md)** (recommended) | Deploys everything below in one step with the same least-privilege setup. Defaults to IAP directly on Cloud Run (`iap_mode = "cloud_run"`). |
+| **Manual steps 1–7** (below) | You prefer `gcloud`, or can't use Terraform. Also uses IAP directly on Cloud Run: no load balancer, domain, certificate or static IP. |
+| **[Load balancer and custom domain](#alternative-load-balancer-and-custom-domain)** | You need your own domain on a Google Cloud load balancer, for example to add Cloud Armor. Replaces step 6. |
 
 Each step below reuses the shell variables set in earlier steps, so run them all in the same terminal session.
 
@@ -136,27 +169,96 @@ export SERVICE_NAME="ccaas-sync-service"
 
 gcloud builds submit . \
   --config=cloudbuild.yaml \
-  --substitutions=_REGION=$REGION,_REPO_NAME=$REPO_NAME,_SERVICE_NAME=$SERVICE_NAME,_SERVICE_ACCOUNT=$SERVICE_ACCOUNT_EMAIL
+  --substitutions=_REGION=$REGION,_REPO_NAME=$REPO_NAME,_SERVICE_NAME=$SERVICE_NAME,_SERVICE_ACCOUNT=$SERVICE_ACCOUNT_EMAIL,_INGRESS=all
 ```
 
 Cloud Build deploys the service **and a Cloud Run Job, `<service>-sync`, that performs live syncs**. The UI and Cloud Scheduler ask the service to sync; the service starts the job and returns immediately, and the UI follows the run's progress. That way a sync that takes minutes isn't cut off by the roughly 30-second limit on browser requests through IAP. Simulations still run directly in the service.
 
 Cloud Build deploys the service with:
-- `--no-allow-unauthenticated` and `--ingress=internal-and-cloud-load-balancing`, so the `*.run.app` URL can't be reached from the internet;
+- `--no-allow-unauthenticated`, so only callers allowed by IAM (in step 6, IAP) can invoke it;
+- `--ingress=all` from `_INGRESS=all`. IAP on the service (step 6) authenticates every request, and the app also verifies IAP's signed header. If you leave out `_INGRESS`, the default is `internal-and-cloud-load-balancing`, which is what the [load balancer setup](#alternative-load-balancer-and-custom-domain) needs;
 - `--timeout=900`, so a live sync has time to finish.
 
-Until you complete [step 7.3](#73-configure-the-service-to-verify-iap-identities), the UI shows "Service authentication is not configured".
+Until you complete [step 6](#6-secure-the-application-with-iap), the UI shows "Service authentication is not configured".
 
-Allow the application's service account to invoke the service. Cloud Scheduler needs this to trigger syncs.
+### 6. Secure the application with IAP
+
+Turn on IAP directly on the Cloud Run service. Users sign in at the service's `run.app` URL.
+
+1. **Turn on IAP and allow it to call the service:**
+   ```bash
+   gcloud beta services identity create --service=iap.googleapis.com --project=$PROJECT_ID
+
+   gcloud run services add-iam-policy-binding $SERVICE_NAME --region=$REGION \
+     --member="serviceAccount:service-${PROJECT_NUMBER}@gcp-sa-iap.iam.gserviceaccount.com" \
+     --role="roles/run.invoker"
+
+   gcloud beta run services update $SERVICE_NAME --region=$REGION --iap \
+     --update-env-vars=IAP_AUDIENCE=/projects/${PROJECT_NUMBER}/locations/${REGION}/services/${SERVICE_NAME}
+   ```
+2. **Grant access** to admins and to the application's service account. Scheduled syncs go through IAP too, so the service account needs access as well.
+   ```bash
+   for member in user:your-email@example.com serviceAccount:${SERVICE_ACCOUNT_EMAIL}; do
+     gcloud iap web add-iam-policy-binding --resource-type=cloud-run \
+       --service=$SERVICE_NAME --region=$REGION \
+       --member="$member" --role="roles/iap.httpsResourceAccessor" --condition=None
+   done
+   ```
+3. **Let Cloud Scheduler through IAP.** IAP accepts Cloud Scheduler's Google-signed token only if the token's audience is an OAuth client ID that IAP trusts.
+   1. In the Console, go to **Google Auth Platform > Clients** and create a **Web application** OAuth client. No redirect URIs are needed, and you don't need the client secret.
+   2. Trust that client in IAP and tell the service to use it as the scheduler audience:
+      ```bash
+      export SCHEDULER_CLIENT_ID="<client-id>.apps.googleusercontent.com"
+
+      cat > iap-settings.yaml <<EOF
+      accessSettings:
+        oauthSettings:
+          programmaticClients:
+          - ${SCHEDULER_CLIENT_ID}
+      EOF
+      gcloud iap settings set iap-settings.yaml --resource-type=cloud-run \
+        --service=$SERVICE_NAME --region=$REGION
+
+      gcloud run services update $SERVICE_NAME --region=$REGION \
+        --update-env-vars=SCHEDULER_OIDC_AUDIENCE=$SCHEDULER_CLIENT_ID
+      ```
+   3. Open the UI and click **Save**. Saving updates the scheduler job to send the new audience.
+
+> **Note:** If your organization restricts IAM members to your own domain (`iam.allowedPolicyMemberDomains`), the IAP service agent binding in step 6.1 may be rejected. Ask an org admin for a temporary project-level exception while you add it.
+
+> **Tip:** For a friendlier URL without a load balancer, a [Cloud Run domain mapping](https://cloud.google.com/run/docs/mapping-custom-domains) can point your own domain at the service (available in some regions).
+
+### 7. Restrict who can make changes (admin allowlist)
+
+IAP decides who can open the app. `ADMIN_EMAILS` decides who can **change** things:
+
+| Role | Can |
+|---|---|
+| **Admin** (listed in `ADMIN_EMAILS`) | Save the configuration (including credentials), run live syncs, proceed CCaaS jobs, run connection tests |
+| **Viewer** (anyone else with IAP access) | View the configuration, CCaaS details, jobs and directory groups, and run simulations |
 
 ```bash
-gcloud run services add-iam-policy-binding $SERVICE_NAME \
-  --region=$REGION \
-  --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
-  --role="roles/run.invoker"
+gcloud run services update $SERVICE_NAME --region=$REGION \
+  --update-env-vars='^;^ADMIN_EMAILS=alice@example.com,bob@example.com,domain:ops.example.com'
 ```
 
-### 6. Set up the load balancer and custom domain
+Entries are email addresses or `domain:<domain>`. The `^;^` prefix tells gcloud to use `;` as the separator between variables, so the commas stay inside the value. The scheduler's service account can always run scheduled syncs. **If `ADMIN_EMAILS` is not set, every IAP user is an admin** (the behavior before 1.3.0). The UI shows a warning when this is the case.
+
+### Alternative: load balancer and custom domain
+
+Use this **instead of step 6** if you need your own domain on an external HTTPS load balancer.
+
+1. Deploy (step 5) **without** `_INGRESS=all`, so the service only accepts traffic from the load balancer: `--ingress=internal-and-cloud-load-balancing`.
+2. Allow the application's service account to invoke the service. Cloud Scheduler calls the service through the load balancer with this identity.
+   ```bash
+   gcloud run services add-iam-policy-binding $SERVICE_NAME \
+     --region=$REGION \
+     --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
+     --role="roles/run.invoker"
+   ```
+3. Follow the steps below.
+
+#### Load balancer
 
 ```bash
 export DOMAIN="sync.your-domain.com"   # replace with your domain
@@ -195,9 +297,7 @@ echo "Create a DNS A record for $DOMAIN pointing to $LB_IP"
 
 **Action required:** create a DNS `A` record for your domain pointing to the IP address printed above.
 
-### 7. Secure the application with IAP
-
-#### 7.1 OAuth consent screen and IAP client
+#### OAuth consent screen and IAP client
 
 ```bash
 gcloud beta services identity create --service=iap.googleapis.com --project=$PROJECT_ID
@@ -210,7 +310,7 @@ gcloud iap oauth-clients create $(gcloud iap oauth-brands list --format='value(n
   --display_name="CCaaS Sync IAP Client"
 ```
 
-#### 7.2 Enable IAP and grant access
+#### Enable IAP and grant access
 
 ```bash
 # Enable IAP on the backend service
@@ -236,7 +336,7 @@ done
 gcloud iap web get-iam-policy --resource-type=backend-services --service=ccaas-sync-backend
 ```
 
-#### 7.3 Configure the service to verify IAP identities
+#### Configure the service to verify IAP identities
 
 The application checks the signed IAP header (`x-goog-iap-jwt-assertion`) on every API request, and rejects any request that didn't come through IAP.
 
@@ -247,68 +347,6 @@ gcloud run services update $SERVICE_NAME \
   --region=$REGION \
   --update-env-vars=IAP_AUDIENCE=/projects/${PROJECT_NUMBER}/global/backendServices/${BACKEND_ID}
 ```
-
-### 8. Restrict who can make changes (admin allowlist)
-
-IAP decides who can open the app. `ADMIN_EMAILS` decides who can **change** things:
-
-| Role | Can |
-|---|---|
-| **Admin** (listed in `ADMIN_EMAILS`) | Save the configuration (including credentials), run live syncs, proceed CCaaS jobs, run connection tests |
-| **Viewer** (anyone else with IAP access) | View the configuration, CCaaS details, jobs and directory groups, and run simulations |
-
-```bash
-gcloud run services update $SERVICE_NAME --region=$REGION \
-  --update-env-vars='^;^ADMIN_EMAILS=alice@example.com,bob@example.com,domain:ops.example.com'
-```
-
-Entries are email addresses or `domain:<domain>`. The `^;^` prefix tells gcloud to use `;` as the separator between variables, so the commas stay inside the value. The scheduler's service account can always run scheduled syncs. **If `ADMIN_EMAILS` is not set, every IAP user is an admin** (the behavior before 1.3.0). The UI shows a warning when this is the case.
-
-### Option B: IAP directly on Cloud Run (no load balancer)
-
-Instead of steps 6 and 7, you can turn on IAP directly on the Cloud Run service. This needs no load balancer, domain, certificate or static IP. Users sign in at the service's `run.app` URL.
-
-1. **Deploy with ingress `all`.** Run [step 5](#5-build-and-deploy) with `_INGRESS=all` added to `--substitutions`. IAP on the service authenticates every request, and the app still verifies IAP's signed header.
-2. **Turn on IAP and allow it to call the service:**
-   ```bash
-   gcloud beta services identity create --service=iap.googleapis.com --project=$PROJECT_ID
-
-   gcloud run services add-iam-policy-binding $SERVICE_NAME --region=$REGION \
-     --member="serviceAccount:service-${PROJECT_NUMBER}@gcp-sa-iap.iam.gserviceaccount.com" \
-     --role="roles/run.invoker"
-
-   gcloud beta run services update $SERVICE_NAME --region=$REGION --iap \
-     --update-env-vars=IAP_AUDIENCE=/projects/${PROJECT_NUMBER}/locations/${REGION}/services/${SERVICE_NAME}
-   ```
-3. **Grant access** to admins and to the application's service account. Scheduled syncs go through IAP too, so the service account needs access as well.
-   ```bash
-   for member in user:your-email@example.com serviceAccount:${SERVICE_ACCOUNT_EMAIL}; do
-     gcloud iap web add-iam-policy-binding --resource-type=cloud-run \
-       --service=$SERVICE_NAME --region=$REGION \
-       --member="$member" --role="roles/iap.httpsResourceAccessor" --condition=None
-   done
-   ```
-4. **Let Cloud Scheduler through IAP.** IAP accepts Cloud Scheduler's Google-signed token only if the token's audience is an OAuth client ID that IAP trusts.
-   1. In the Console, go to **Google Auth Platform > Clients** and create a **Web application** OAuth client. No redirect URIs are needed, and you don't need the client secret.
-   2. Trust that client in IAP and tell the service to use it as the scheduler audience:
-      ```bash
-      export SCHEDULER_CLIENT_ID="<client-id>.apps.googleusercontent.com"
-
-      cat > iap-settings.yaml <<EOF
-      accessSettings:
-        oauthSettings:
-          programmaticClients:
-          - ${SCHEDULER_CLIENT_ID}
-      EOF
-      gcloud iap settings set iap-settings.yaml --resource-type=cloud-run \
-        --service=$SERVICE_NAME --region=$REGION
-
-      gcloud run services update $SERVICE_NAME --region=$REGION \
-        --update-env-vars=SCHEDULER_OIDC_AUDIENCE=$SCHEDULER_CLIENT_ID
-      ```
-   3. Open the UI and click **Save**. Saving updates the scheduler job to send the new audience.
-
-> **Note:** If your organization restricts IAM members to your own domain (`iam.allowedPolicyMemberDomains`), the IAP service agent binding in step 2 may be rejected. Ask an org admin for a temporary project-level exception while you add it.
 
 ## Google Workspace without a stored key
 
@@ -379,7 +417,7 @@ Other behavior to be aware of:
 
 ### To 1.3.0 (hardening)
 
-1. Redeploy, then **set `ADMIN_EMAILS`** (step 8).
+1. Redeploy, then **set `ADMIN_EMAILS`** (step 7).
 2. **Tighten the service account's permissions.** Grant the roles from step 4.2, then remove the broad project-wide ones that earlier versions of this README asked for:
    ```bash
    for role in roles/secretmanager.admin roles/secretmanager.secretAccessor roles/secretmanager.secretVersionManager roles/cloudscheduler.admin roles/iam.serviceAccountUser; do
@@ -397,7 +435,7 @@ Other behavior to be aware of:
 
 ### To 1.0.1 (security fix, GHSA-47vv-vx4f-pm44)
 
-Deployments created before 1.0.1 used `--allow-unauthenticated`, which made the API reachable without IAP through the `*.run.app` URL. After redeploying and completing [step 7.3](#73-configure-the-service-to-verify-iap-identities):
+Deployments created before 1.0.1 used `--allow-unauthenticated`, which made the API reachable without IAP through the `*.run.app` URL. After redeploying and completing [step 6](#6-secure-the-application-with-iap) (or, behind a load balancer, [setting `IAP_AUDIENCE`](#configure-the-service-to-verify-iap-identities)):
 
 ```bash
 # Remove the public invoker binding (if still present) and restrict ingress

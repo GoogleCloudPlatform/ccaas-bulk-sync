@@ -24,6 +24,10 @@
 
 **Upgrade impact:** expect one-off updates on the first sync for users who match several team mappings, and for users whose names differ. Run **Simulate Only** first.
 
+### Documentation
+- The README now recommends **Terraform** and **IAP directly on Cloud Run**; the load balancer with a custom domain is documented as an alternative. Step 5 deploys with `_INGRESS=all`, IAP is step 6 and the admin allowlist is step 7.
+- New architecture diagram in the README, and a rewritten `solution_overview.md` with the architecture, the sync flow and the configuration sections.
+
 ## 1.4.0: Operations
 
 ### Upgrade notes

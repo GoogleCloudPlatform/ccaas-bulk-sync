@@ -1,57 +1,102 @@
-CCaaS Bulk Synchronization Service - Solution Overview
-1. Introduction
-This document provides a technical overview of the CCaaS Bulk Synchronization Service, a Node.js application designed to run on Google Cloud Run. The primary purpose of this service is to act as a bridge between a source user directory (Microsoft Active Directory or Google Workspace) and Google Cloud Contact Center AI Platform (CCaaS).
+# CCaaS Bulk Sync: solution overview
 
-It automates the process of user lifecycle management within CCaaS by synchronizing users from directory groups to specific CCaaS teams and roles. When users are added or removed from a source group (e.g., due to new hires or departures), the service automatically updates their status in CCaaS, ensuring user access is always current.
+CCaaS Bulk Sync keeps the users in Google Cloud Contact Center as a Service (CCaaS) in step with groups in a user directory: **Google Workspace**, **Microsoft Active Directory** or **Microsoft Entra ID**. Administrators map directory groups to CCaaS roles and teams. The service then adds, updates and deactivates CCaaS users to match, on a schedule or on demand.
 
-2. System Architecture
-The solution is composed of several key components running on Google Cloud:
+For deployment steps, see the [README](README.md).
 
-Node.js Application: The core of the service, built with Express.js. It provides a web UI and an API for configuration and exposes an endpoint to trigger the synchronization logic.
+## Architecture
 
-Web UI: A single-page application for configuration. Administrators can manage CCaaS and directory service credentials, map directory groups to CCaaS teams/roles, and manually trigger a sync.
+```mermaid
+flowchart LR
+  subgraph users["People and schedules"]
+    admin["Admins and viewers (browser)"]
+    sched["Cloud Scheduler"]
+  end
+  subgraph gcp["Google Cloud project"]
+    iap["Identity-Aware Proxy"]
+    svc["Cloud Run service: UI and API"]
+    job["Cloud Run Job: sync worker"]
+    fs[("Firestore: config, run history, lock")]
+    sm[("Secret Manager: credentials")]
+    logs["Cloud Logging and Monitoring alerts"]
+  end
+  dir["Directory: Workspace, AD or Entra ID"]
+  ccaas["CCaaS bulk update API"]
 
-Google Cloud Run: A fully managed serverless platform that hosts the containerized Node.js application.
+  admin -->|"sign in"| iap
+  sched -->|"OIDC token: POST /api/sync"| iap
+  iap -->|"signed IAP header"| svc
+  svc -->|"live sync: start run"| job
+  svc -->|"save schedule"| sched
+  svc --> fs
+  svc --> sm
+  job --> fs
+  job --> sm
+  job --> dir
+  job --> ccaas
+  svc -.->|"simulate, tests, lookups"| dir
+  svc -.->|"simulate, tests, lookups"| ccaas
+  svc --> logs
+  job --> logs
+```
 
-Google Cloud Firestore: A serverless NoSQL document database used to persistently store the application's configuration, such as API keys, directory settings, and group mappings.
+| Component | Role |
+|---|---|
+| **Identity-Aware Proxy (IAP)** | Signs users in and lets only allowed people (and the scheduler's service account) reach the app. Recommended: IAP directly on Cloud Run. A load balancer with a custom domain is also supported. |
+| **Cloud Run service** | Serves the web UI and the `/api/*` API. Every API request must carry IAP's signed header. Only admins (`ADMIN_EMAILS`) can save the configuration, run live syncs or run connection tests; everyone else with IAP access is a viewer. Runs simulations. |
+| **Cloud Run Job** (`<service>-sync`) | Runs live syncs. Moving them out of the request path means a sync that takes minutes isn't cut off by the roughly 30-second limit on browser requests through IAP. |
+| **Cloud Scheduler** | Triggers scheduled syncs through IAP with an OIDC token. The service creates and updates the scheduler job when the schedule is saved (daily, hourly or cron, in a chosen time zone). |
+| **Firestore** | Stores the configuration (with references to secrets, never the secrets themselves), the run history (newest 200 runs) and a lock so that only one live sync runs at a time. |
+| **Secret Manager** | Stores the CCaaS API key and directory credentials. Saving a new credential adds a version and disables the old ones. Google Workspace can use keyless domain-wide delegation, so no key is stored at all. |
+| **Cloud Logging and Monitoring** | One structured `sync_run` log entry per sync (counts and job IDs only, never user details). Optional alerts for failed or blocked syncs and for missing scheduled successes. |
 
-Google Cloud Build: A continuous integration and deployment (CI/CD) service used to automate the building of the Docker container and its deployment to Cloud Run.
+## How a sync works
 
-Google Cloud Scheduler: A cron job service used to trigger the synchronization process on a recurring schedule.
+```mermaid
+sequenceDiagram
+  participant T as UI or Cloud Scheduler
+  participant S as Cloud Run service
+  participant J as Cloud Run Job
+  participant D as Directory
+  participant C as CCaaS
+  T->>S: POST /api/sync
+  S->>S: Check admin, take Firestore lock
+  S->>J: Start run (run ID)
+  S-->>T: 202 Accepted + run ID
+  J->>D: Read members of each mapped group
+  J->>C: Read all CCaaS users (every page)
+  J->>J: Build plan and apply safety checks
+  J->>C: Submit one bulk job (add, update, deactivate)
+  J->>C: Poll until the job finishes
+  J->>J: Record run, release lock
+  T->>S: GET /api/sync-runs/:id (UI polls)
+```
 
-Identity-Aware Proxy (IAP): A Google Cloud security service that protects the web UI by enforcing access policies.
+1. **Read the directory.** For every group mapping, read the group's members. With **Include members of nested groups**, members of nested groups at any depth count too.
+2. **Read CCaaS.** Read every CCaaS user, across all pages.
+3. **Build the plan.** Match users by email, without regard to case:
+   - **Add:** in a mapped group but not in CCaaS. Created with the sync role plus every role and team from every mapping they match.
+   - **Update:** managed by this tool and their roles, teams or name differ.
+   - **Deactivate:** managed by this tool but no longer in any mapped group.
+   - **Skip:** an existing CCaaS user not managed by this tool. Skipped and reported by default, or adopted if **Existing CCaaS Users** is set to **Adopt**.
+4. **Check safety.** Abort if a mapped group is missing, or if the directory returns no users while CCaaS has managed users. Block scheduled syncs that would deactivate more than **Max Deactivations per Sync**; manual syncs can confirm **Run Anyway**.
+5. **Apply.** Submit one CCaaS bulk job and follow it to completion. The run, its counts and the CCaaS job ID are recorded in the run history.
 
-3. Core Functionality
-The main business logic is contained within the sync-logic.js module. The process is executed as follows:
+**Simulate Only** runs steps 1–4 in the service and returns the plan, including a per-user list of changes, without changing anything.
 
-Fetch Source Users: Based on the configured mappings stored in Firestore, the service connects to either Google Workspace or Microsoft Active Directory to fetch the current list of users within specified groups.
+## Configuration
 
-Fetch CCaaS State: The service makes calls to the CCaaS Bulk Update API to retrieve the list of available teams and roles for display in the UI's mapping configuration.
+Everything is configured in the UI, under **Configuration**:
 
-Compare and Reconcile: The application compares the list of users from the source directory with the list of existing users in CCaaS.
+- **CCaaS Configuration:** the CCaaS host and API key.
+- **Sync Schedule:** daily, hourly or cron, a time zone, the initial CCaaS job poll delay, the deactivation limit, how to treat existing CCaaS users, and whether to sync names.
+- **Directory Configuration:** the **User Sync Custom Role** that marks users as managed by this tool, and the directory: Google Workspace (keyless delegation or a key), Active Directory (LDAP) or Entra ID (app registration), with a connection test.
+- **Group Mappings:** each directory group maps to one or more CCaaS roles and teams, with an optional nested-groups setting. Roles and teams accumulate across mappings.
 
-New Users: Users present in the source directory but not in CCaaS are marked for creation.
+The other sections are **Jobs** (recent CCaaS bulk jobs), **Runs** (recent sync runs) and **Help**.
 
-Existing Users: Users present in both systems are marked for update.
+## Deployment and automation
 
-Deactivated Users: Users present in CCaaS but no longer in any mapped source groups are marked for deactivation.
-
-Execute Bulk Update: The service constructs a payload containing the lists of users to be created, updated, and deactivated and sends it to the CCaaS Bulk Update API.
-
-4. Configuration
-All configuration is managed through the secure web UI and stored persistently in a Firestore document.
-
-CCaaS Settings: The CCaaS API host URL and the necessary API key for authentication.
-
-Directory Settings: The type of directory (Google Workspace or AD) and the required connection details.
-
-Group Mappings: A flexible mapping table to define relationships between a source group and a specific CCaaS team and role.
-
-Manual Trigger: A "Run Now" button in the UI for on-demand synchronization.
-
-5. Deployment and Automation
-The deployment and scheduling process is automated using infrastructure-as-code:
-
-cloudbuild.yaml: This file defines the CI/CD pipeline. When changes are pushed to the source repository, Cloud Build automatically builds a new Docker image, pushes it to Google Artifact Registry, and deploys it to Cloud Run.
-
-Cloud Scheduler: A scheduled job is configured to send a POST request to the /api/sync endpoint of the Cloud Run service at a defined interval, triggering the automated synchronization.
+- **Terraform** (`terraform/`) is the recommended way to deploy. It creates the APIs, Firestore, Artifact Registry, secrets, a least-privilege service account, the Cloud Run service and job, IAP, and optional alerts.
+- **Cloud Build** (`cloudbuild.yaml`) builds the container image and deploys the service and the job. Use it for manual deployments and upgrades.
+- **GitHub Actions** run the unit tests, a dependency audit, a container build and startup smoke test, Terraform validation and CodeQL on every pull request.
