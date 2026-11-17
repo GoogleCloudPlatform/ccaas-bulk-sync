@@ -200,3 +200,20 @@ test('bulk upload sends a multipart file named users.json with Basic auth', asyn
     assert.strictEqual(file.type, 'application/json');
     assert.deepStrictEqual(JSON.parse(await file.text()), [{ email: 'a@x.com' }]);
 });
+
+test('nested groups: AD uses the in-chain matching rule, Entra uses transitiveMembers', () => {
+    const dn = 'CN=Sales (EMEA),OU=Groups,DC=x,DC=com';
+    assert.strictEqual(syncLogic._adMemberOfFilter(dn, false).toString(), '(memberOf=CN=Sales \\28EMEA\\29,OU=Groups,DC=x,DC=com)');
+    assert.strictEqual(syncLogic._adMemberOfFilter(dn, true).toString(), '(memberOf:1.2.840.113556.1.4.1941:=CN=Sales \\28EMEA\\29,OU=Groups,DC=x,DC=com)');
+    assert.strictEqual(syncLogic._entraMembersPath('g1', false), '/groups/g1/members/microsoft.graph.user');
+    assert.strictEqual(syncLogic._entraMembersPath('g1', true), '/groups/g1/transitiveMembers/microsoft.graph.user');
+});
+
+test('runSync passes each mapping\'s includeNested setting to the directory lookup', async () => {
+    stubCcaas({ users: USERS_30 });
+    const seen = [];
+    const deps = { getDirectoryUsersByGroup: async (g, _dir, _cache, opts) => { seen.push([g, opts.includeNested]); return USERS_30.map(u => ({ email: u.email })); } };
+    const config = { ...BASE, mappings: [{ group: 'flat', rules: [] }, { group: 'nested', rules: [], includeNested: true }] };
+    await syncLogic.runSync(config, { simulate: true }, deps);
+    assert.deepStrictEqual(seen, [['flat', false], ['nested', true]]);
+});
