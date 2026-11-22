@@ -11,6 +11,7 @@ It runs on Cloud Run, stores its configuration in Firestore and its credentials 
 - [Sync safety](#sync-safety)
 - [Upgrading](#upgrading)
 - [Appendix: Microsoft Entra ID setup](#appendix-microsoft-entra-id-setup)
+- [Roadmap](ROADMAP.md)
 
 ## Architecture
 
